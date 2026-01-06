@@ -206,9 +206,9 @@ clang -fsyntax-only -x c header.h
 ### Phase 03: Graphics System
 - [X] 03a: SDL2 window creation
 - [X] 03b: Surface management
-- [ ] 03c: Texture streaming
-- [ ] 03d: Palette conversion
-- [ ] 03e: Full render pipeline
+- [X] 03c: Texture streaming
+- [X] 03d: Palette conversion
+- [X] 03e: Full render pipeline
 
 ### Phase 04: Input System
 - [ ] 04a: Event pump setup
