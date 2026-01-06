@@ -1,0 +1,25 @@
+[package]
+name = "redalert_platform"
+version = "0.1.0"
+edition = "2021"
+description = "Platform abstraction layer for Red Alert macOS port"
+license = "GPL-3.0"
+
+[lib]
+name = "redalert_platform"
+crate-type = ["staticlib"]
+
+[dependencies]
+once_cell = "1.19"
+thiserror = "1.0"
+log = "0.4"
+
+[features]
+cbindgen-run = []
+
+[build-dependencies]
+cbindgen = "0.26"
+
+[profile.release]
+lto = true
+codegen-units = 1

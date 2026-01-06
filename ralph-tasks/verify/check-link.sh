@@ -37,10 +37,14 @@ fi
 
 # Try to run it (should init and shutdown cleanly)
 # Note: This assumes the executable exits cleanly
-if timeout 5 "$EXECUTABLE" --test-init 2>&1 || [ $? -eq 0 ]; then
+OUTPUT=$("$EXECUTABLE" --test-init 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -eq 0 ] && echo "$OUTPUT" | grep -q "Test passed"; then
     echo "VERIFY_SUCCESS"
     exit 0
 else
-    echo "VERIFY_FAILED: Executable did not run cleanly"
+    echo "VERIFY_FAILED: Executable did not run cleanly (exit code: $EXIT_CODE)"
+    echo "Output: $OUTPUT"
     exit 1
 fi
