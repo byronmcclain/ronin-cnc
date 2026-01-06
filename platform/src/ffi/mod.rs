@@ -282,6 +282,75 @@ pub extern "C" fn Platform_Graphics_ClearBackBuffer(color: u8) {
 }
 
 // =============================================================================
+// Palette Management
+// =============================================================================
+
+use crate::graphics::PaletteEntry;
+
+/// Set palette entries
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_SetPalette(
+    entries: *const PaletteEntry,
+    start: i32,
+    count: i32,
+) {
+    if entries.is_null() || start < 0 || count <= 0 || start + count > 256 {
+        return;
+    }
+
+    graphics::with_graphics(|state| {
+        unsafe {
+            let slice = std::slice::from_raw_parts(entries, count as usize);
+            state.palette.set_range(start as usize, slice);
+        }
+    });
+}
+
+/// Get palette entries
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_GetPalette(
+    entries: *mut PaletteEntry,
+    start: i32,
+    count: i32,
+) {
+    if entries.is_null() || start < 0 || count <= 0 || start + count > 256 {
+        return;
+    }
+
+    graphics::with_graphics(|state| {
+        unsafe {
+            let dest = std::slice::from_raw_parts_mut(entries, count as usize);
+            let src = state.palette.get_range(start as usize, count as usize);
+            dest[..src.len()].copy_from_slice(src);
+        }
+    });
+}
+
+/// Set single palette entry
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_SetPaletteEntry(index: u8, r: u8, g: u8, b: u8) {
+    graphics::with_graphics(|state| {
+        state.palette.set(index, PaletteEntry::new(r, g, b));
+    });
+}
+
+/// Fade palette (0.0 = black, 1.0 = full)
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_FadePalette(factor: f32) {
+    graphics::with_graphics(|state| {
+        state.palette.fade(factor);
+    });
+}
+
+/// Restore palette from fade
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_RestorePalette() {
+    graphics::with_graphics(|state| {
+        state.palette.restore();
+    });
+}
+
+// =============================================================================
 // Surface Management
 // =============================================================================
 

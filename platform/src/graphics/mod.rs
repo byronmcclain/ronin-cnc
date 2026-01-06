@@ -1,6 +1,9 @@
 //! Graphics subsystem using SDL2
 
+pub mod palette;
 pub mod surface;
+
+pub use palette::{Palette, PaletteEntry};
 pub use surface::Surface;
 
 use crate::error::PlatformError;
@@ -55,6 +58,8 @@ pub struct GraphicsState {
     screen_texture_ptr: *mut sdl2::sys::SDL_Texture,
     pub display_mode: DisplayMode,
     pub back_buffer: Vec<u8>,
+    pub palette: Palette,
+    pub argb_buffer: Vec<u32>,
 }
 
 impl GraphicsState {
@@ -103,6 +108,8 @@ impl GraphicsState {
             screen_texture_ptr,
             display_mode: mode,
             back_buffer: vec![0; buffer_size],
+            palette: Palette::new(),
+            argb_buffer: vec![0; buffer_size],
         })
     }
 
@@ -118,6 +125,11 @@ impl GraphicsState {
     /// Clear back buffer with a color index
     pub fn clear_back_buffer(&mut self, color: u8) {
         self.back_buffer.fill(color);
+    }
+
+    /// Convert back buffer using palette and store in argb_buffer
+    pub fn convert_back_buffer(&mut self) {
+        self.palette.convert_buffer(&self.back_buffer, &mut self.argb_buffer);
     }
 
     /// Update texture with 32-bit ARGB data

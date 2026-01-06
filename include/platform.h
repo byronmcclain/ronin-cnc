@@ -53,6 +53,15 @@ typedef struct DisplayMode {
 } DisplayMode;
 
 /**
+ * RGB palette entry (matches game format)
+ */
+typedef struct PaletteEntry {
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+} PaletteEntry;
+
+/**
  * Opaque surface handle for C
  */
 typedef struct PlatformSurface {
@@ -174,6 +183,31 @@ int32_t Platform_Graphics_GetBackBuffer(uint8_t **pixels,
  * Clear back buffer with color index
  */
 void Platform_Graphics_ClearBackBuffer(uint8_t color);
+
+/**
+ * Set palette entries
+ */
+void Platform_Graphics_SetPalette(const struct PaletteEntry *entries, int32_t start, int32_t count);
+
+/**
+ * Get palette entries
+ */
+void Platform_Graphics_GetPalette(struct PaletteEntry *entries, int32_t start, int32_t count);
+
+/**
+ * Set single palette entry
+ */
+void Platform_Graphics_SetPaletteEntry(uint8_t index, uint8_t r, uint8_t g, uint8_t b);
+
+/**
+ * Fade palette (0.0 = black, 1.0 = full)
+ */
+void Platform_Graphics_FadePalette(float factor);
+
+/**
+ * Restore palette from fade
+ */
+void Platform_Graphics_RestorePalette(void);
 
 /**
  * Create a new surface
