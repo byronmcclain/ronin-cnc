@@ -1,1 +1,0 @@
-{"rustc":18415816196306954164,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[8566240740257888185,"build_script_build",false,7758160947914382702]],"local":[{"RerunIfChanged":{"output":"debug/build/redalert_platform-49c1c00bb4f025a0/output","paths":["src/lib.rs","cbindgen.toml"]}}],"rustflags":[],"config":0,"compile_kind":0}

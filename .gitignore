@@ -1,0 +1,25 @@
+# Build outputs
+build/
+target/
+
+# Rust
+platform/target/
+
+# IDE
+.idea/
+*.swp
+*.swo
+.vscode/
+
+# macOS
+.DS_Store
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# Ralph loop state
+.claude/
+**/.claude/

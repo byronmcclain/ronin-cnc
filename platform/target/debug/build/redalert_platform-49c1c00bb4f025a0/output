@@ -1,3 +1,0 @@
-cargo:warning=Generated: /Users/ooartist/Src/Ronin_CnC/include/platform.h
-cargo:rerun-if-changed=src/lib.rs
-cargo:rerun-if-changed=cbindgen.toml
