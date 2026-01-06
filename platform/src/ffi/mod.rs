@@ -351,6 +351,56 @@ pub extern "C" fn Platform_Graphics_RestorePalette() {
 }
 
 // =============================================================================
+// Render Pipeline
+// =============================================================================
+
+/// Flip back buffer to screen (full render pipeline)
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_Flip() -> i32 {
+    let result = graphics::with_graphics(|state| {
+        state.flip()
+    });
+
+    match result {
+        Some(Ok(())) => 0,
+        Some(Err(e)) => {
+            set_error(e.to_string());
+            -1
+        }
+        None => {
+            set_error("Graphics not initialized");
+            -1
+        }
+    }
+}
+
+/// Wait for vertical sync (no-op, handled by SDL)
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_WaitVSync() {
+    // VSync is handled by SDL_RENDERER_PRESENTVSYNC flag
+}
+
+/// Draw test pattern to back buffer (for testing)
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_DrawTestPattern() {
+    graphics::with_graphics(|state| {
+        state.draw_test_pattern();
+    });
+}
+
+/// Get free video memory (returns large value for compatibility)
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_GetFreeVideoMemory() -> u32 {
+    256 * 1024 * 1024 // 256 MB
+}
+
+/// Check if hardware accelerated
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_IsHardwareAccelerated() -> bool {
+    true // SDL2 renderer is always accelerated on modern systems
+}
+
+// =============================================================================
 // Surface Management
 // =============================================================================
 

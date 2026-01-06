@@ -210,6 +210,31 @@ void Platform_Graphics_FadePalette(float factor);
 void Platform_Graphics_RestorePalette(void);
 
 /**
+ * Flip back buffer to screen (full render pipeline)
+ */
+int32_t Platform_Graphics_Flip(void);
+
+/**
+ * Wait for vertical sync (no-op, handled by SDL)
+ */
+void Platform_Graphics_WaitVSync(void);
+
+/**
+ * Draw test pattern to back buffer (for testing)
+ */
+void Platform_Graphics_DrawTestPattern(void);
+
+/**
+ * Get free video memory (returns large value for compatibility)
+ */
+uint32_t Platform_Graphics_GetFreeVideoMemory(void);
+
+/**
+ * Check if hardware accelerated
+ */
+bool Platform_Graphics_IsHardwareAccelerated(void);
+
+/**
  * Create a new surface
  */
 struct PlatformSurface *Platform_Surface_Create(int32_t width, int32_t height, int32_t bpp);

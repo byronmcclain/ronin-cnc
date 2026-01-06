@@ -218,6 +218,50 @@ impl GraphicsState {
     pub fn present(&mut self) {
         self.canvas.present();
     }
+
+    /// Complete flip operation:
+    /// 1. Convert 8-bit back buffer to 32-bit ARGB using palette
+    /// 2. Upload to streaming texture
+    /// 3. Render texture to canvas
+    /// 4. Present (with VSync)
+    pub fn flip(&mut self) -> Result<(), PlatformError> {
+        // Step 1: Convert back buffer using palette LUT
+        self.palette.ensure_lut();
+        self.palette.convert_buffer(&self.back_buffer, &mut self.argb_buffer);
+
+        // Step 2: Update texture with converted pixels
+        self.update_texture(&self.argb_buffer.clone())?;
+
+        // Step 3 & 4: Render texture to canvas and present
+        self.present_texture()
+    }
+
+    /// Draw directly to back buffer - vertical color bars for testing
+    pub fn draw_test_pattern(&mut self) {
+        let width = self.display_mode.width as usize;
+        let height = self.display_mode.height as usize;
+
+        for y in 0..height {
+            for x in 0..width {
+                // Vertical color bars
+                let color = ((x * 256) / width) as u8;
+                self.back_buffer[y * width + x] = color;
+            }
+        }
+    }
+
+    /// Draw horizontal gradient - for palette testing
+    pub fn draw_gradient(&mut self) {
+        let width = self.display_mode.width as usize;
+        let height = self.display_mode.height as usize;
+
+        for y in 0..height {
+            for x in 0..width {
+                let color = ((y * 256) / height) as u8;
+                self.back_buffer[y * width + x] = color;
+            }
+        }
+    }
 }
 
 impl Drop for GraphicsState {

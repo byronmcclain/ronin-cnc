@@ -101,6 +101,83 @@ int test_logging() {
     return 0;
 }
 
+int test_graphics() {
+    TEST("Graphics system");
+
+    // Initialize graphics (requires Platform_Init first)
+    int result = Platform_Graphics_Init();
+    if (result != 0) {
+        char err[256];
+        Platform_GetLastError(reinterpret_cast<int8_t*>(err), sizeof(err));
+        printf("SKIP (init failed: %s)\n", err);
+        return 0; // Don't fail test if graphics unavailable (CI environment)
+    }
+
+    if (!Platform_Graphics_IsInitialized()) {
+        Platform_Graphics_Shutdown();
+        FAIL("Graphics should be initialized");
+    }
+
+    // Check display mode
+    DisplayMode mode;
+    Platform_Graphics_GetMode(&mode);
+    if (mode.width != 640 || mode.height != 400) {
+        printf("(mode: %dx%d) ", mode.width, mode.height);
+    }
+
+    // Get back buffer
+    uint8_t* pixels = nullptr;
+    int32_t width, height, pitch;
+    result = Platform_Graphics_GetBackBuffer(&pixels, &width, &height, &pitch);
+    if (result != 0 || pixels == nullptr) {
+        Platform_Graphics_Shutdown();
+        FAIL("Failed to get back buffer");
+    }
+
+    // Draw test pattern (vertical color bars using grayscale palette)
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            pixels[y * pitch + x] = (x * 256 / width) & 0xFF;
+        }
+    }
+
+    // Flip to display
+    result = Platform_Graphics_Flip();
+    if (result != 0) {
+        char err[256];
+        Platform_GetLastError(reinterpret_cast<int8_t*>(err), sizeof(err));
+        Platform_Graphics_Shutdown();
+        printf("FAIL: Flip failed: %s\n", err);
+        return 1;
+    }
+
+    // Test palette modification
+    Platform_Graphics_SetPaletteEntry(128, 255, 0, 0);  // Set index 128 to red
+
+    // Draw horizontal line at color 128 (should be red now)
+    for (int x = 0; x < width; x++) {
+        pixels[200 * pitch + x] = 128;
+    }
+
+    // Flip again
+    result = Platform_Graphics_Flip();
+    if (result != 0) {
+        Platform_Graphics_Shutdown();
+        FAIL("Second flip failed");
+    }
+
+    // Cleanup
+    Platform_Graphics_Shutdown();
+
+    if (Platform_Graphics_IsInitialized()) {
+        FAIL("Graphics should be shut down");
+    }
+
+    printf("(buffer: %dx%d, flip OK) ", width, height);
+    PASS();
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
     bool test_mode = false;
     for (int i = 1; i < argc; i++) {
@@ -120,6 +197,14 @@ int main(int argc, char* argv[]) {
     failures += test_init_shutdown();
     failures += test_error_handling();
     failures += test_logging();
+
+    // Graphics test (requires Platform_Init for SDL context)
+    {
+        // Re-init for graphics test
+        Platform_Init();
+        failures += test_graphics();
+        Platform_Shutdown();
+    }
 
     // Final init/shutdown for normal operation test
     printf("\n  Final init/shutdown cycle... ");
