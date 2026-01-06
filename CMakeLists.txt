@@ -76,10 +76,22 @@ add_dependencies(RedAlert generate_headers)
 # Link against Rust platform library
 target_link_libraries(RedAlert PRIVATE redalert_platform)
 
-# macOS: Link required frameworks
+# macOS: Link required frameworks (including SDL2 dependencies)
 if(APPLE)
     target_link_libraries(RedAlert PRIVATE
         "-framework CoreFoundation"
         "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
     )
 endif()

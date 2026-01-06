@@ -43,6 +43,22 @@ typedef enum PlatformResult {
   PLATFORM_RESULT_INIT_FAILED = 3,
 } PlatformResult;
 
+/**
+ * Display mode configuration
+ */
+typedef struct DisplayMode {
+  int32_t width;
+  int32_t height;
+  int32_t bits_per_pixel;
+} DisplayMode;
+
+/**
+ * Opaque surface handle for C
+ */
+typedef struct PlatformSurface {
+  uint8_t _private[0];
+} PlatformSurface;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -114,6 +130,116 @@ void Platform_LogWarn(const char *msg);
  * Log a formatted error message
  */
 void Platform_LogError(const char *msg);
+
+/**
+ * Initialize graphics subsystem
+ */
+int32_t Platform_Graphics_Init(void);
+
+/**
+ * Shutdown graphics subsystem
+ */
+void Platform_Graphics_Shutdown(void);
+
+/**
+ * Check if graphics is initialized
+ */
+bool Platform_Graphics_IsInitialized(void);
+
+/**
+ * Clear screen with color (for testing)
+ */
+void Platform_Graphics_Clear(uint8_t r, uint8_t g, uint8_t b);
+
+/**
+ * Present the frame
+ */
+void Platform_Graphics_Present(void);
+
+/**
+ * Get display mode
+ */
+void Platform_Graphics_GetMode(struct DisplayMode *mode);
+
+/**
+ * Get back buffer for direct pixel access
+ * Returns pointer to 8-bit indexed pixel buffer
+ */
+int32_t Platform_Graphics_GetBackBuffer(uint8_t **pixels,
+                                        int32_t *width,
+                                        int32_t *height,
+                                        int32_t *pitch);
+
+/**
+ * Clear back buffer with color index
+ */
+void Platform_Graphics_ClearBackBuffer(uint8_t color);
+
+/**
+ * Create a new surface
+ */
+struct PlatformSurface *Platform_Surface_Create(int32_t width, int32_t height, int32_t bpp);
+
+/**
+ * Destroy a surface
+ */
+void Platform_Surface_Destroy(struct PlatformSurface *surface);
+
+/**
+ * Get surface dimensions
+ */
+void Platform_Surface_GetSize(const struct PlatformSurface *surface,
+                              int32_t *width,
+                              int32_t *height);
+
+/**
+ * Lock surface for direct pixel access
+ */
+int32_t Platform_Surface_Lock(struct PlatformSurface *surface, void **pixels, int32_t *pitch);
+
+/**
+ * Unlock surface
+ */
+void Platform_Surface_Unlock(struct PlatformSurface *surface);
+
+/**
+ * Blit surface to another
+ */
+int32_t Platform_Surface_Blit(struct PlatformSurface *dest,
+                              int32_t dx,
+                              int32_t dy,
+                              const struct PlatformSurface *src,
+                              int32_t sx,
+                              int32_t sy,
+                              int32_t sw,
+                              int32_t sh);
+
+/**
+ * Blit with transparency (skip color 0)
+ */
+int32_t Platform_Surface_BlitTransparent(struct PlatformSurface *dest,
+                                         int32_t dx,
+                                         int32_t dy,
+                                         const struct PlatformSurface *src,
+                                         int32_t sx,
+                                         int32_t sy,
+                                         int32_t sw,
+                                         int32_t sh);
+
+/**
+ * Fill rectangle
+ */
+void Platform_Surface_Fill(struct PlatformSurface *surface,
+                           int32_t x,
+                           int32_t y,
+                           int32_t w,
+                           int32_t h,
+                           uint8_t color);
+
+/**
+ * Clear entire surface
+ */
+void Platform_Surface_Clear(struct PlatformSurface *surface, uint8_t color);
 
 #ifdef __cplusplus
 } // extern "C"

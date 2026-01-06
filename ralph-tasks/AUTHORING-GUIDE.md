@@ -204,8 +204,8 @@ clang -fsyntax-only -x c header.h
 - [X] 02c: Header compatibility test
 
 ### Phase 03: Graphics System
-- [ ] 03a: SDL2 window creation
-- [ ] 03b: Surface management
+- [X] 03a: SDL2 window creation
+- [X] 03b: Surface management
 - [ ] 03c: Texture streaming
 - [ ] 03d: Palette conversion
 - [ ] 03e: Full render pipeline

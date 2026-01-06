@@ -8,6 +8,9 @@ fn main() {
 
     // Tell Cargo to re-run if these change
     println!("cargo:rerun-if-changed=src/lib.rs");
+    println!("cargo:rerun-if-changed=src/ffi/mod.rs");
+    println!("cargo:rerun-if-changed=src/graphics/mod.rs");
+    println!("cargo:rerun-if-changed=src/graphics/surface.rs");
     println!("cargo:rerun-if-changed=cbindgen.toml");
 }
 

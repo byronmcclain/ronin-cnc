@@ -5,6 +5,7 @@
 
 use crate::error::{catch_panic_or, get_error, set_error, clear_error};
 use crate::{PLATFORM_STATE, PlatformState, PlatformResult, PLATFORM_VERSION};
+use crate::graphics::{self, DisplayMode};
 use std::ffi::{c_char, CStr};
 
 /// Log level for Platform_Log
@@ -29,6 +30,13 @@ pub extern "C" fn Platform_Init() -> PlatformResult {
         if state.is_some() {
             return PlatformResult::AlreadyInitialized;
         }
+
+        // Initialize SDL context
+        if let Err(e) = graphics::init_sdl() {
+            set_error(e.to_string());
+            return PlatformResult::InitFailed;
+        }
+
         *state = Some(PlatformState { initialized: true });
         PlatformResult::Success
     })
@@ -177,4 +185,282 @@ pub unsafe extern "C" fn Platform_LogWarn(msg: *const c_char) {
 #[no_mangle]
 pub unsafe extern "C" fn Platform_LogError(msg: *const c_char) {
     Platform_Log(LogLevel::Error, msg);
+}
+
+// =============================================================================
+// Graphics
+// =============================================================================
+
+/// Initialize graphics subsystem
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_Init() -> i32 {
+    catch_panic_or(-1, || {
+        match graphics::init() {
+            Ok(()) => 0,
+            Err(e) => {
+                set_error(e.to_string());
+                -1
+            }
+        }
+    })
+}
+
+/// Shutdown graphics subsystem
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_Shutdown() {
+    graphics::shutdown();
+}
+
+/// Check if graphics is initialized
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_IsInitialized() -> bool {
+    graphics::is_initialized()
+}
+
+/// Clear screen with color (for testing)
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_Clear(r: u8, g: u8, b: u8) {
+    graphics::with_graphics(|state| {
+        state.clear(r, g, b);
+    });
+}
+
+/// Present the frame
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_Present() {
+    graphics::with_graphics(|state| {
+        state.present();
+    });
+}
+
+/// Get display mode
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_GetMode(mode: *mut DisplayMode) {
+    if mode.is_null() {
+        return;
+    }
+
+    graphics::with_graphics(|state| {
+        unsafe {
+            *mode = state.display_mode;
+        }
+    });
+}
+
+/// Get back buffer for direct pixel access
+/// Returns pointer to 8-bit indexed pixel buffer
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_GetBackBuffer(
+    pixels: *mut *mut u8,
+    width: *mut i32,
+    height: *mut i32,
+    pitch: *mut i32,
+) -> i32 {
+    if pixels.is_null() {
+        return -1;
+    }
+
+    let result = graphics::with_graphics(|state| {
+        let (ptr, w, h, p) = state.get_back_buffer();
+        unsafe {
+            *pixels = ptr;
+            if !width.is_null() { *width = w; }
+            if !height.is_null() { *height = h; }
+            if !pitch.is_null() { *pitch = p; }
+        }
+    });
+
+    if result.is_some() { 0 } else { -1 }
+}
+
+/// Clear back buffer with color index
+#[no_mangle]
+pub extern "C" fn Platform_Graphics_ClearBackBuffer(color: u8) {
+    graphics::with_graphics(|state| {
+        state.clear_back_buffer(color);
+    });
+}
+
+// =============================================================================
+// Surface Management
+// =============================================================================
+
+use crate::graphics::Surface;
+use std::ffi::c_void;
+
+/// Opaque surface handle for C
+#[repr(C)]
+pub struct PlatformSurface {
+    _private: [u8; 0],
+}
+
+/// Internal surface wrapper (not exposed to C)
+struct SurfaceWrapper(Surface);
+
+/// Convert raw pointer to internal surface
+unsafe fn surface_ref(ptr: *const PlatformSurface) -> &'static Surface {
+    &(*(ptr as *const SurfaceWrapper)).0
+}
+
+/// Convert raw pointer to mutable internal surface
+unsafe fn surface_mut(ptr: *mut PlatformSurface) -> &'static mut Surface {
+    &mut (*(ptr as *mut SurfaceWrapper)).0
+}
+
+/// Create a new surface
+#[no_mangle]
+pub extern "C" fn Platform_Surface_Create(width: i32, height: i32, bpp: i32) -> *mut PlatformSurface {
+    if width <= 0 || height <= 0 || bpp <= 0 {
+        return std::ptr::null_mut();
+    }
+    let surface = Surface::new(width, height, bpp);
+    Box::into_raw(Box::new(SurfaceWrapper(surface))) as *mut PlatformSurface
+}
+
+/// Destroy a surface
+#[no_mangle]
+pub extern "C" fn Platform_Surface_Destroy(surface: *mut PlatformSurface) {
+    if !surface.is_null() {
+        unsafe {
+            drop(Box::from_raw(surface as *mut SurfaceWrapper));
+        }
+    }
+}
+
+/// Get surface dimensions
+#[no_mangle]
+pub extern "C" fn Platform_Surface_GetSize(
+    surface: *const PlatformSurface,
+    width: *mut i32,
+    height: *mut i32,
+) {
+    if surface.is_null() {
+        return;
+    }
+    unsafe {
+        let (w, h) = surface_ref(surface).get_size();
+        if !width.is_null() {
+            *width = w;
+        }
+        if !height.is_null() {
+            *height = h;
+        }
+    }
+}
+
+/// Lock surface for direct pixel access
+#[no_mangle]
+pub extern "C" fn Platform_Surface_Lock(
+    surface: *mut PlatformSurface,
+    pixels: *mut *mut c_void,
+    pitch: *mut i32,
+) -> i32 {
+    if surface.is_null() || pixels.is_null() || pitch.is_null() {
+        return -1;
+    }
+
+    unsafe {
+        match surface_mut(surface).lock() {
+            Ok((ptr, p)) => {
+                *pixels = ptr as *mut c_void;
+                *pitch = p;
+                0
+            }
+            Err(e) => {
+                set_error(e.to_string());
+                -1
+            }
+        }
+    }
+}
+
+/// Unlock surface
+#[no_mangle]
+pub extern "C" fn Platform_Surface_Unlock(surface: *mut PlatformSurface) {
+    if !surface.is_null() {
+        unsafe {
+            surface_mut(surface).unlock();
+        }
+    }
+}
+
+/// Blit surface to another
+#[no_mangle]
+pub extern "C" fn Platform_Surface_Blit(
+    dest: *mut PlatformSurface,
+    dx: i32,
+    dy: i32,
+    src: *const PlatformSurface,
+    sx: i32,
+    sy: i32,
+    sw: i32,
+    sh: i32,
+) -> i32 {
+    if dest.is_null() || src.is_null() {
+        return -1;
+    }
+
+    unsafe {
+        match surface_mut(dest).blit(dx, dy, surface_ref(src), sx, sy, sw, sh) {
+            Ok(()) => 0,
+            Err(e) => {
+                set_error(e.to_string());
+                -1
+            }
+        }
+    }
+}
+
+/// Blit with transparency (skip color 0)
+#[no_mangle]
+pub extern "C" fn Platform_Surface_BlitTransparent(
+    dest: *mut PlatformSurface,
+    dx: i32,
+    dy: i32,
+    src: *const PlatformSurface,
+    sx: i32,
+    sy: i32,
+    sw: i32,
+    sh: i32,
+) -> i32 {
+    if dest.is_null() || src.is_null() {
+        return -1;
+    }
+
+    unsafe {
+        match surface_mut(dest).blit_transparent(dx, dy, surface_ref(src), sx, sy, sw, sh) {
+            Ok(()) => 0,
+            Err(e) => {
+                set_error(e.to_string());
+                -1
+            }
+        }
+    }
+}
+
+/// Fill rectangle
+#[no_mangle]
+pub extern "C" fn Platform_Surface_Fill(
+    surface: *mut PlatformSurface,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    color: u8,
+) {
+    if !surface.is_null() {
+        unsafe {
+            surface_mut(surface).fill(x, y, w, h, color);
+        }
+    }
+}
+
+/// Clear entire surface
+#[no_mangle]
+pub extern "C" fn Platform_Surface_Clear(surface: *mut PlatformSurface, color: u8) {
+    if !surface.is_null() {
+        unsafe {
+            surface_mut(surface).clear(color);
+        }
+    }
 }

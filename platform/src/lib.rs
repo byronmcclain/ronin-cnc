@@ -9,8 +9,10 @@ use std::sync::Mutex;
 
 pub mod error;
 pub mod ffi;
+pub mod graphics;
 
 pub use error::PlatformError;
+pub use graphics::DisplayMode;
 
 /// Platform version
 pub const PLATFORM_VERSION: i32 = 1;
