@@ -401,6 +401,28 @@ pub extern "C" fn Platform_Graphics_IsHardwareAccelerated() -> bool {
 }
 
 // =============================================================================
+// Event Handling
+// =============================================================================
+
+/// Poll events and return true if quit was requested (window close or Escape key)
+#[no_mangle]
+pub extern "C" fn Platform_PollEvents() -> bool {
+    graphics::poll_events()
+}
+
+/// Get tick count in milliseconds since SDL init
+#[no_mangle]
+pub extern "C" fn Platform_GetTicks() -> u32 {
+    graphics::get_ticks()
+}
+
+/// Delay for specified milliseconds
+#[no_mangle]
+pub extern "C" fn Platform_Delay(ms: u32) {
+    graphics::delay(ms);
+}
+
+// =============================================================================
 // Surface Management
 // =============================================================================
 

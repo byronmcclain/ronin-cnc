@@ -330,3 +330,34 @@ where
 pub fn is_initialized() -> bool {
     GRAPHICS.lock().ok().map(|g| g.is_some()).unwrap_or(false)
 }
+
+/// Poll events and return true if quit was requested
+pub fn poll_events() -> bool {
+    with_sdl(|sdl| {
+        let mut event_pump = match sdl.event_pump() {
+            Ok(pump) => pump,
+            Err(_) => return false,
+        };
+
+        for event in event_pump.poll_iter() {
+            match event {
+                sdl2::event::Event::Quit { .. } => return true,
+                sdl2::event::Event::KeyDown { keycode: Some(sdl2::keyboard::Keycode::Escape), .. } => return true,
+                _ => {}
+            }
+        }
+        false
+    }).unwrap_or(false)
+}
+
+/// Get current tick count in milliseconds
+pub fn get_ticks() -> u32 {
+    with_sdl(|sdl| {
+        sdl.timer().map(|t| t.ticks()).unwrap_or(0)
+    }).unwrap_or(0)
+}
+
+/// Delay for specified milliseconds
+pub fn delay(ms: u32) {
+    std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+}

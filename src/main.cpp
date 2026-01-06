@@ -178,15 +178,142 @@ int test_graphics() {
     return 0;
 }
 
-int main(int argc, char* argv[]) {
-    bool test_mode = false;
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--test-init") == 0 ||
-            strcmp(argv[i], "--test") == 0) {
-            test_mode = true;
+// =============================================================================
+// Demo Mode - Interactive graphics demonstration
+// =============================================================================
+
+void setup_rainbow_palette() {
+    // Create a smooth rainbow palette
+    for (int i = 0; i < 256; i++) {
+        uint8_t r, g, b;
+        if (i < 43) {
+            // Red to Yellow
+            r = 255;
+            g = i * 6;
+            b = 0;
+        } else if (i < 85) {
+            // Yellow to Green
+            r = 255 - (i - 43) * 6;
+            g = 255;
+            b = 0;
+        } else if (i < 128) {
+            // Green to Cyan
+            r = 0;
+            g = 255;
+            b = (i - 85) * 6;
+        } else if (i < 170) {
+            // Cyan to Blue
+            r = 0;
+            g = 255 - (i - 128) * 6;
+            b = 255;
+        } else if (i < 213) {
+            // Blue to Magenta
+            r = (i - 170) * 6;
+            g = 0;
+            b = 255;
+        } else {
+            // Magenta to Red
+            r = 255;
+            g = 0;
+            b = 255 - (i - 213) * 6;
+        }
+        Platform_Graphics_SetPaletteEntry(i, r, g, b);
+    }
+}
+
+int run_demo() {
+    printf("=== Red Alert Platform Demo ===\n\n");
+    printf("Press ESC or close window to exit.\n\n");
+
+    // Initialize platform
+    if (Platform_Init() != PLATFORM_RESULT_SUCCESS) {
+        printf("Failed to initialize platform!\n");
+        return 1;
+    }
+
+    // Initialize graphics
+    if (Platform_Graphics_Init() != 0) {
+        char err[256];
+        Platform_GetLastError(reinterpret_cast<int8_t*>(err), sizeof(err));
+        printf("Failed to initialize graphics: %s\n", err);
+        Platform_Shutdown();
+        return 1;
+    }
+
+    // Get back buffer
+    uint8_t* pixels = nullptr;
+    int32_t width, height, pitch;
+    if (Platform_Graphics_GetBackBuffer(&pixels, &width, &height, &pitch) != 0) {
+        printf("Failed to get back buffer!\n");
+        Platform_Graphics_Shutdown();
+        Platform_Shutdown();
+        return 1;
+    }
+
+    printf("Display: %dx%d\n", width, height);
+    printf("Running demo...\n\n");
+
+    // Setup colorful palette
+    setup_rainbow_palette();
+
+    // Main loop
+    uint32_t frame = 0;
+    uint32_t last_fps_time = Platform_GetTicks();
+    int fps_counter = 0;
+
+    while (!Platform_PollEvents()) {
+        uint32_t time = Platform_GetTicks();
+
+        // Draw animated plasma effect
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                // Simple plasma formula
+                int v1 = 128 + 127 * (x + frame) / 64 % 256;
+                int v2 = 128 + 127 * (y + frame / 2) / 32 % 256;
+                int v3 = 128 + 127 * ((x + y + frame) / 48) % 256;
+                int color = (v1 + v2 + v3) / 3;
+                pixels[y * pitch + x] = color & 0xFF;
+            }
+        }
+
+        // Draw border
+        for (int x = 0; x < width; x++) {
+            pixels[x] = 255;  // Top
+            pixels[(height - 1) * pitch + x] = 255;  // Bottom
+        }
+        for (int y = 0; y < height; y++) {
+            pixels[y * pitch] = 255;  // Left
+            pixels[y * pitch + width - 1] = 255;  // Right
+        }
+
+        // Flip to screen
+        Platform_Graphics_Flip();
+        frame++;
+        fps_counter++;
+
+        // Print FPS every second
+        if (time - last_fps_time >= 1000) {
+            printf("\rFPS: %d    ", fps_counter);
+            fflush(stdout);
+            fps_counter = 0;
+            last_fps_time = time;
         }
     }
 
+    printf("\n\nDemo ended. Total frames: %u\n", frame);
+
+    // Cleanup
+    Platform_Graphics_Shutdown();
+    Platform_Shutdown();
+
+    return 0;
+}
+
+// =============================================================================
+// Test Mode
+// =============================================================================
+
+int run_tests() {
     printf("=== Platform Layer Compatibility Test ===\n\n");
     printf("Platform version: %d\n\n", Platform_GetVersion());
 
@@ -225,4 +352,47 @@ int main(int argc, char* argv[]) {
         printf("%d test(s) failed\n", failures);
         return 1;
     }
+}
+
+// =============================================================================
+// Main Entry Point
+// =============================================================================
+
+void print_usage(const char* program) {
+    printf("Red Alert Platform Layer\n\n");
+    printf("Usage: %s [options]\n\n", program);
+    printf("Options:\n");
+    printf("  --demo     Run interactive graphics demo\n");
+    printf("  --test     Run platform compatibility tests\n");
+    printf("  --help     Show this help message\n");
+}
+
+int main(int argc, char* argv[]) {
+    bool demo_mode = false;
+    bool test_mode = false;
+    bool help_mode = false;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--demo") == 0) {
+            demo_mode = true;
+        } else if (strcmp(argv[i], "--test-init") == 0 ||
+                   strcmp(argv[i], "--test") == 0) {
+            test_mode = true;
+        } else if (strcmp(argv[i], "--help") == 0 ||
+                   strcmp(argv[i], "-h") == 0) {
+            help_mode = true;
+        }
+    }
+
+    if (help_mode) {
+        print_usage(argv[0]);
+        return 0;
+    }
+
+    if (demo_mode) {
+        return run_demo();
+    }
+
+    // Default to test mode
+    return run_tests();
 }

@@ -235,6 +235,21 @@ uint32_t Platform_Graphics_GetFreeVideoMemory(void);
 bool Platform_Graphics_IsHardwareAccelerated(void);
 
 /**
+ * Poll events and return true if quit was requested (window close or Escape key)
+ */
+bool Platform_PollEvents(void);
+
+/**
+ * Get tick count in milliseconds since SDL init
+ */
+uint32_t Platform_GetTicks(void);
+
+/**
+ * Delay for specified milliseconds
+ */
+void Platform_Delay(uint32_t ms);
+
+/**
  * Create a new surface
  */
 struct PlatformSurface *Platform_Surface_Create(int32_t width, int32_t height, int32_t bpp);
