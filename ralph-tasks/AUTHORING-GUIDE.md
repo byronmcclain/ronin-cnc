@@ -195,8 +195,8 @@ clang -fsyntax-only -x c header.h
 ### Phase 01: Build System
 - [x] 01a: Rust crate skeleton
 - [x] 01b: cbindgen setup
-- [ ] 01c: CMake integration with corrosion
-- [ ] 01d: Mixed C++/Rust link test
+- [X] 01c: CMake integration with corrosion
+- [X] 01d: Mixed C++/Rust link test
 
 ### Phase 02: Platform Abstraction
 - [ ] 02a: Error types and FFI safety
