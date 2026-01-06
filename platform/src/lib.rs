@@ -11,6 +11,7 @@ pub mod error;
 pub mod ffi;
 pub mod graphics;
 pub mod input;
+pub mod timer;
 
 pub use error::PlatformError;
 pub use graphics::DisplayMode;

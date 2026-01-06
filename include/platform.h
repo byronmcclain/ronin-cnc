@@ -118,6 +118,18 @@ typedef struct PlatformSurface {
   uint8_t _private[0];
 } PlatformSurface;
 
+/**
+ * Timer handle
+ */
+typedef int32_t TimerHandle;
+
+/**
+ * C timer callback type
+ */
+typedef void (*CTimerCallback)(void*);
+
+#define INVALID_TIMER_HANDLE -1
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -469,6 +481,72 @@ void Platform_Mouse_Show(void);
  * Hide mouse cursor
  */
 void Platform_Mouse_Hide(void);
+
+/**
+ * Get milliseconds since platform init
+ */
+uint32_t Platform_Timer_GetTicks(void);
+
+/**
+ * Sleep for milliseconds
+ */
+void Platform_Timer_Delay(uint32_t milliseconds);
+
+/**
+ * Get high-resolution performance counter
+ */
+uint64_t Platform_Timer_GetPerformanceCounter(void);
+
+/**
+ * Get performance counter frequency
+ */
+uint64_t Platform_Timer_GetPerformanceFrequency(void);
+
+/**
+ * Get time in seconds (floating point)
+ */
+double Platform_Timer_GetTime(void);
+
+/**
+ * Create a periodic timer
+ * Note: The callback will be called from a separate thread!
+ */
+TimerHandle Platform_Timer_Create(uint32_t interval_ms, CTimerCallback callback, void *userdata);
+
+/**
+ * Destroy a periodic timer
+ */
+void Platform_Timer_Destroy(TimerHandle handle);
+
+/**
+ * Get invalid timer handle constant
+ */
+TimerHandle Platform_Timer_InvalidHandle(void);
+
+/**
+ * Start frame timing
+ */
+void Platform_Frame_Begin(void);
+
+/**
+ * End frame timing (sleeps to maintain target FPS)
+ */
+void Platform_Frame_End(void);
+
+/**
+ * Set target FPS
+ */
+void Platform_Frame_SetTargetFPS(uint32_t fps);
+
+/**
+ * Get last frame time in seconds
+ */
+double Platform_Frame_GetTime(void);
+
+/**
+ * Get current FPS (rolling average)
+ */
+double Platform_Frame_GetFPS(void);
 
 #ifdef __cplusplus
 } // extern "C"

@@ -213,6 +213,49 @@ int test_input() {
     return 0;
 }
 
+int test_timing() {
+    TEST("Timing system");
+
+    // Test get_ticks returns increasing values
+    uint32_t t1 = Platform_Timer_GetTicks();
+    Platform_Timer_Delay(10);
+    uint32_t t2 = Platform_Timer_GetTicks();
+
+    if (t2 <= t1) FAIL("Ticks should increase over time");
+
+    // Check delay was approximately correct (allow 5-50ms tolerance)
+    uint32_t elapsed = t2 - t1;
+    if (elapsed < 5 || elapsed > 50) {
+        printf("(delay was %ums, expected ~10ms) ", elapsed);
+        // Don't fail - timing can vary on different systems
+    }
+
+    // Test performance counter
+    uint64_t freq = Platform_Timer_GetPerformanceFrequency();
+    if (freq != 1000000000) {
+        printf("(freq=%llu, expected 1GHz) ", (unsigned long long)freq);
+    }
+
+    uint64_t pc1 = Platform_Timer_GetPerformanceCounter();
+    Platform_Timer_Delay(1);
+    uint64_t pc2 = Platform_Timer_GetPerformanceCounter();
+
+    if (pc2 <= pc1) FAIL("Performance counter should increase");
+
+    // Test frame timing functions exist and don't crash
+    Platform_Frame_Begin();
+    Platform_Timer_Delay(16); // Simulate ~60fps frame
+    Platform_Frame_End();
+
+    double fps = Platform_Frame_GetFPS();
+    double frame_time = Platform_Frame_GetTime();
+
+    printf("(fps=%.1f, frame=%.3fs) ", fps, frame_time);
+
+    PASS();
+    return 0;
+}
+
 // =============================================================================
 // Demo Mode - Interactive graphics demonstration
 // =============================================================================
@@ -297,9 +340,11 @@ int run_demo() {
     // Main loop
     uint32_t frame = 0;
     uint32_t last_fps_time = Platform_GetTicks();
-    int fps_counter = 0;
 
     while (!Platform_PollEvents()) {
+        // Begin frame timing
+        Platform_Frame_Begin();
+
         uint32_t time = Platform_GetTicks();
 
         // Begin input frame
@@ -411,17 +456,19 @@ int run_demo() {
         // Flip to screen
         Platform_Graphics_Flip();
         frame++;
-        fps_counter++;
+
+        // End frame timing (handles FPS limiting)
+        Platform_Frame_End();
 
         // Print status every second
         if (time - last_fps_time >= 1000) {
-            printf("\rFPS: %d | Mouse: (%d,%d) | Shift:%d Ctrl:%d Alt:%d    ",
-                   fps_counter, mouse_x, mouse_y,
+            double fps = Platform_Frame_GetFPS();
+            printf("\rFPS: %.1f | Mouse: (%d,%d) | Shift:%d Ctrl:%d Alt:%d    ",
+                   fps, mouse_x, mouse_y,
                    Platform_Key_ShiftDown(),
                    Platform_Key_CtrlDown(),
                    Platform_Key_AltDown());
             fflush(stdout);
-            fps_counter = 0;
             last_fps_time = time;
         }
     }
@@ -463,6 +510,13 @@ int run_tests() {
     {
         Platform_Init();
         failures += test_input();
+        Platform_Shutdown();
+    }
+
+    // Timing test
+    {
+        Platform_Init();
+        failures += test_timing();
         Platform_Shutdown();
     }
 

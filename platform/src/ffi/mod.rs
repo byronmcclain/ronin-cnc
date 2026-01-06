@@ -774,3 +774,105 @@ pub extern "C" fn Platform_Mouse_Hide() {
         sdl2::sys::SDL_ShowCursor(sdl2::sys::SDL_DISABLE as i32);
     }
 }
+
+// =============================================================================
+// Timer FFI
+// =============================================================================
+
+use crate::timer;
+
+/// Get milliseconds since platform init
+#[no_mangle]
+pub extern "C" fn Platform_Timer_GetTicks() -> u32 {
+    timer::get_ticks()
+}
+
+/// Sleep for milliseconds
+#[no_mangle]
+pub extern "C" fn Platform_Timer_Delay(milliseconds: u32) {
+    timer::delay(milliseconds);
+}
+
+/// Get high-resolution performance counter
+#[no_mangle]
+pub extern "C" fn Platform_Timer_GetPerformanceCounter() -> u64 {
+    timer::get_performance_counter()
+}
+
+/// Get performance counter frequency
+#[no_mangle]
+pub extern "C" fn Platform_Timer_GetPerformanceFrequency() -> u64 {
+    timer::get_performance_frequency()
+}
+
+/// Get time in seconds (floating point)
+#[no_mangle]
+pub extern "C" fn Platform_Timer_GetTime() -> f64 {
+    timer::get_time()
+}
+
+// =============================================================================
+// Periodic Timers
+// =============================================================================
+
+use crate::timer::{TimerHandle, INVALID_TIMER_HANDLE};
+
+/// C timer callback type
+pub type CTimerCallback = extern "C" fn(*mut c_void);
+
+/// Create a periodic timer
+/// Note: The callback will be called from a separate thread!
+#[no_mangle]
+pub extern "C" fn Platform_Timer_Create(
+    interval_ms: u32,
+    callback: CTimerCallback,
+    userdata: *mut c_void,
+) -> TimerHandle {
+    timer::create_timer_c(interval_ms, callback, userdata)
+}
+
+/// Destroy a periodic timer
+#[no_mangle]
+pub extern "C" fn Platform_Timer_Destroy(handle: TimerHandle) {
+    timer::destroy_timer(handle);
+}
+
+/// Get invalid timer handle constant
+#[no_mangle]
+pub extern "C" fn Platform_Timer_InvalidHandle() -> TimerHandle {
+    INVALID_TIMER_HANDLE
+}
+
+// =============================================================================
+// Frame Rate Control FFI
+// =============================================================================
+
+/// Start frame timing
+#[no_mangle]
+pub extern "C" fn Platform_Frame_Begin() {
+    timer::with_frame_controller(|fc| fc.begin_frame());
+}
+
+/// End frame timing (sleeps to maintain target FPS)
+#[no_mangle]
+pub extern "C" fn Platform_Frame_End() {
+    timer::with_frame_controller(|fc| fc.end_frame());
+}
+
+/// Set target FPS
+#[no_mangle]
+pub extern "C" fn Platform_Frame_SetTargetFPS(fps: u32) {
+    timer::with_frame_controller(|fc| fc.set_target_fps(fps));
+}
+
+/// Get last frame time in seconds
+#[no_mangle]
+pub extern "C" fn Platform_Frame_GetTime() -> f64 {
+    timer::with_frame_controller(|fc| fc.frame_time())
+}
+
+/// Get current FPS (rolling average)
+#[no_mangle]
+pub extern "C" fn Platform_Frame_GetFPS() -> f64 {
+    timer::with_frame_controller(|fc| fc.fps())
+}
