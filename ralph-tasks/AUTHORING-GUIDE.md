@@ -211,9 +211,10 @@ clang -fsyntax-only -x c header.h
 - [X] 03e: Full render pipeline
 
 ### Phase 04: Input System
-- [ ] 04a: Event pump setup
-- [ ] 04b: Keyboard mapping
-- [ ] 04c: Mouse handling
+- [ ] 04a: Input module setup
+- [ ] 04b: Keyboard input
+- [ ] 04c: Mouse input
+- [ ] 04d: Input integration test
 
 ### Phase 05: Timing System
 - [ ] 05a: High-precision timer
