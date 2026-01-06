@@ -19,7 +19,22 @@
 #include <stdlib.h>
 
 /**
- * Result type for platform operations
+ * Platform version
+ */
+#define PLATFORM_VERSION 1
+
+/**
+ * Log level for Platform_Log
+ */
+typedef enum LogLevel {
+  LOG_LEVEL_DEBUG = 0,
+  LOG_LEVEL_INFO = 1,
+  LOG_LEVEL_WARN = 2,
+  LOG_LEVEL_ERROR = 3,
+} LogLevel;
+
+/**
+ * Result type for platform operations (FFI-compatible)
  */
 typedef enum PlatformResult {
   PLATFORM_RESULT_SUCCESS = 0,
@@ -33,49 +48,72 @@ extern "C" {
 #endif // __cplusplus
 
 /**
- * Initialize the platform layer.
- *
- * # Safety
- * This function is safe to call from C code.
- * Must be called before any other platform functions.
+ * Initialize the platform layer
  */
 enum PlatformResult Platform_Init(void);
 
 /**
- * Shutdown the platform layer.
- *
- * # Safety
- * This function is safe to call from C code.
- * Must be called to clean up platform resources.
+ * Shutdown the platform layer
  */
 enum PlatformResult Platform_Shutdown(void);
 
 /**
- * Check if the platform is initialized.
- *
- * # Safety
- * This function is safe to call from C code.
+ * Check if platform is initialized
  */
 bool Platform_IsInitialized(void);
 
 /**
- * Get the platform layer version.
- *
- * # Safety
- * This function is safe to call from C code.
+ * Get platform version
  */
 int32_t Platform_GetVersion(void);
 
 /**
- * Get the last error message.
- *
- * # Safety
- * This function is safe to call from C code.
- * The buffer must be valid for buffer_size bytes.
- * Returns the number of bytes written (excluding null terminator),
- * or -1 if buffer is null or too small.
+ * Get the last error message into a buffer
+ * Returns number of bytes written, or -1 on error
+ * Buffer will be null-terminated if there's space
  */
 int32_t Platform_GetLastError(int8_t *buffer, int32_t buffer_size);
+
+/**
+ * Get error as static string pointer (valid until next error)
+ * Returns null if no error
+ */
+const char *Platform_GetErrorString(void);
+
+/**
+ * Set an error message from C string
+ */
+void Platform_SetError(const char *msg);
+
+/**
+ * Clear the last error
+ */
+void Platform_ClearError(void);
+
+/**
+ * Log a message at the specified level
+ */
+void Platform_Log(enum LogLevel level, const char *msg);
+
+/**
+ * Log a formatted debug message
+ */
+void Platform_LogDebug(const char *msg);
+
+/**
+ * Log a formatted info message
+ */
+void Platform_LogInfo(const char *msg);
+
+/**
+ * Log a formatted warning message
+ */
+void Platform_LogWarn(const char *msg);
+
+/**
+ * Log a formatted error message
+ */
+void Platform_LogError(const char *msg);
 
 #ifdef __cplusplus
 } // extern "C"

@@ -199,9 +199,9 @@ clang -fsyntax-only -x c header.h
 - [X] 01d: Mixed C++/Rust link test
 
 ### Phase 02: Platform Abstraction
-- [ ] 02a: Error types and FFI safety
-- [ ] 02b: Core FFI exports
-- [ ] 02c: Header compatibility test
+- [X] 02a: Error types and FFI safety
+- [X] 02b: Core FFI exports
+- [X] 02c: Header compatibility test
 
 ### Phase 03: Graphics System
 - [ ] 03a: SDL2 window creation
