@@ -211,15 +211,16 @@ clang -fsyntax-only -x c header.h
 - [X] 03e: Full render pipeline
 
 ### Phase 04: Input System
-- [ ] 04a: Input module setup
-- [ ] 04b: Keyboard input
-- [ ] 04c: Mouse input
-- [ ] 04d: Input integration test
+- [X] 04a: Input module setup
+- [X] 04b: Keyboard input
+- [X] 04c: Mouse input
+- [X] 04d: Input integration test
 
 ### Phase 05: Timing System
-- [ ] 05a: High-precision timer
-- [ ] 05b: Periodic callbacks
-- [ ] 05c: Frame rate limiter
+- [ ] 05a: Basic timing functions
+- [ ] 05b: Periodic timers
+- [ ] 05c: Frame rate control
+- [ ] 05d: Timing integration test
 
 ### Phase 06: Memory Management
 - [ ] 06a: Allocator implementation
