@@ -21,7 +21,7 @@ cpp_compat = true
 
 [export]
 prefix = ""
-include = []
+include = ["KeyCode", "MouseButton"]
 exclude = []
 
 [export.rename]

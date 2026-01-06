@@ -6,7 +6,11 @@
 use crate::error::{catch_panic_or, get_error, set_error, clear_error};
 use crate::{PLATFORM_STATE, PlatformState, PlatformResult, PLATFORM_VERSION};
 use crate::graphics::{self, DisplayMode};
+use crate::input;
 use std::ffi::{c_char, CStr};
+
+// Re-export input types for cbindgen
+pub use crate::input::{KeyCode, MouseButton};
 
 /// Log level for Platform_Log
 #[repr(C)]
@@ -603,5 +607,170 @@ pub extern "C" fn Platform_Surface_Clear(surface: *mut PlatformSurface, color: u
         unsafe {
             surface_mut(surface).clear(color);
         }
+    }
+}
+
+// =============================================================================
+// Input System
+// =============================================================================
+
+/// Initialize input subsystem
+#[no_mangle]
+pub extern "C" fn Platform_Input_Init() -> i32 {
+    // Input is auto-initialized via Lazy static
+    0
+}
+
+/// Shutdown input subsystem
+#[no_mangle]
+pub extern "C" fn Platform_Input_Shutdown() {
+    // Nothing to clean up
+}
+
+/// Update input state (call at start of each frame)
+#[no_mangle]
+pub extern "C" fn Platform_Input_Update() {
+    input::begin_frame();
+}
+
+/// Check if quit was requested
+#[no_mangle]
+pub extern "C" fn Platform_Input_ShouldQuit() -> bool {
+    input::should_quit()
+}
+
+// =============================================================================
+// Keyboard Input
+// =============================================================================
+
+/// Check if key is currently pressed
+#[no_mangle]
+pub extern "C" fn Platform_Key_IsPressed(key: KeyCode) -> bool {
+    input::is_key_pressed(key)
+}
+
+/// Check if key was just pressed this frame
+#[no_mangle]
+pub extern "C" fn Platform_Key_WasPressed(key: KeyCode) -> bool {
+    input::was_key_pressed(key)
+}
+
+/// Check if key was just released this frame
+#[no_mangle]
+pub extern "C" fn Platform_Key_WasReleased(key: KeyCode) -> bool {
+    input::was_key_released(key)
+}
+
+/// Get next key event from queue (returns false if empty)
+#[no_mangle]
+pub extern "C" fn Platform_Key_GetNext(key: *mut KeyCode, released: *mut bool) -> bool {
+    if key.is_null() || released.is_null() {
+        return false;
+    }
+
+    input::with_input(|state| {
+        if let Some(event) = state.pop_key_event() {
+            unsafe {
+                *key = event.key;
+                *released = event.released;
+            }
+            true
+        } else {
+            false
+        }
+    }).unwrap_or(false)
+}
+
+/// Clear key event queue
+#[no_mangle]
+pub extern "C" fn Platform_Key_Clear() {
+    input::with_input(|state| state.clear_key_queue());
+}
+
+/// Check if Shift is held
+#[no_mangle]
+pub extern "C" fn Platform_Key_ShiftDown() -> bool {
+    input::shift_down()
+}
+
+/// Check if Ctrl is held
+#[no_mangle]
+pub extern "C" fn Platform_Key_CtrlDown() -> bool {
+    input::ctrl_down()
+}
+
+/// Check if Alt is held
+#[no_mangle]
+pub extern "C" fn Platform_Key_AltDown() -> bool {
+    input::alt_down()
+}
+
+// =============================================================================
+// Mouse Input
+// =============================================================================
+
+/// Get mouse position
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_GetPosition(x: *mut i32, y: *mut i32) {
+    let (mx, my) = input::get_mouse_position();
+    if !x.is_null() {
+        unsafe { *x = mx; }
+    }
+    if !y.is_null() {
+        unsafe { *y = my; }
+    }
+}
+
+/// Get mouse X position
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_GetX() -> i32 {
+    input::get_mouse_position().0
+}
+
+/// Get mouse Y position
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_GetY() -> i32 {
+    input::get_mouse_position().1
+}
+
+/// Check if mouse button is pressed
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_IsPressed(button: MouseButton) -> bool {
+    input::is_mouse_pressed(button)
+}
+
+/// Check if mouse button was clicked this frame
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_WasClicked(button: MouseButton) -> bool {
+    input::was_mouse_clicked(button)
+}
+
+/// Check if mouse button was double-clicked this frame
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_WasDoubleClicked(button: MouseButton) -> bool {
+    input::was_mouse_double_clicked(button)
+}
+
+/// Get mouse wheel delta
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_GetWheelDelta() -> i32 {
+    input::get_mouse_wheel()
+}
+
+/// Show mouse cursor
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_Show() {
+    // SDL2 show_cursor takes bool and returns previous state
+    // We just want to show/hide, so ignore the return value
+    unsafe {
+        sdl2::sys::SDL_ShowCursor(sdl2::sys::SDL_ENABLE as i32);
+    }
+}
+
+/// Hide mouse cursor
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_Hide() {
+    unsafe {
+        sdl2::sys::SDL_ShowCursor(sdl2::sys::SDL_DISABLE as i32);
     }
 }

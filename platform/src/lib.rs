@@ -10,6 +10,7 @@ use std::sync::Mutex;
 pub mod error;
 pub mod ffi;
 pub mod graphics;
+pub mod input;
 
 pub use error::PlatformError;
 pub use graphics::DisplayMode;

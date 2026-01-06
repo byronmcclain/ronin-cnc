@@ -178,6 +178,41 @@ int test_graphics() {
     return 0;
 }
 
+int test_input() {
+    TEST("Input system");
+
+    // Input init should succeed (auto-initialized)
+    int result = Platform_Input_Init();
+    if (result != 0) {
+        FAIL("Input init failed");
+    }
+
+    // Update should not crash
+    Platform_Input_Update();
+
+    // Key queries should return false (no keys pressed)
+    if (Platform_Key_IsPressed(KEY_CODE_SPACE)) {
+        // This might be true if user is holding space, so just warn
+        printf("(space pressed?) ");
+    }
+
+    // Mouse position should be valid
+    int32_t mx, my;
+    Platform_Mouse_GetPosition(&mx, &my);
+    // Position can be anything, just verify it doesn't crash
+
+    // Modifier queries should work
+    bool shift = Platform_Key_ShiftDown();
+    bool ctrl = Platform_Key_CtrlDown();
+    bool alt = Platform_Key_AltDown();
+    (void)shift; (void)ctrl; (void)alt;  // Suppress unused warnings
+
+    Platform_Input_Shutdown();
+
+    PASS();
+    return 0;
+}
+
 // =============================================================================
 // Demo Mode - Interactive graphics demonstration
 // =============================================================================
@@ -223,7 +258,11 @@ void setup_rainbow_palette() {
 
 int run_demo() {
     printf("=== Red Alert Platform Demo ===\n\n");
-    printf("Press ESC or close window to exit.\n\n");
+    printf("Controls:\n");
+    printf("  Mouse: Move to see position, click to see buttons\n");
+    printf("  Keys:  Press any key to see it detected\n");
+    printf("  Shift/Ctrl/Alt: Hold to see modifier state\n");
+    printf("  ESC: Exit demo\n\n");
 
     // Initialize platform
     if (Platform_Init() != PLATFORM_RESULT_SUCCESS) {
@@ -251,10 +290,9 @@ int run_demo() {
     }
 
     printf("Display: %dx%d\n", width, height);
-    printf("Running demo...\n\n");
+    printf("Running input demo...\n\n");
 
-    // Setup colorful palette
-    setup_rainbow_palette();
+    // Setup grayscale palette (default is fine)
 
     // Main loop
     uint32_t frame = 0;
@@ -264,26 +302,110 @@ int run_demo() {
     while (!Platform_PollEvents()) {
         uint32_t time = Platform_GetTicks();
 
-        // Draw animated plasma effect
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                // Simple plasma formula
-                int v1 = 128 + 127 * (x + frame) / 64 % 256;
-                int v2 = 128 + 127 * (y + frame / 2) / 32 % 256;
-                int v3 = 128 + 127 * ((x + y + frame) / 48) % 256;
-                int color = (v1 + v2 + v3) / 3;
-                pixels[y * pitch + x] = color & 0xFF;
+        // Begin input frame
+        Platform_Input_Update();
+
+        // Clear back buffer
+        Platform_Graphics_ClearBackBuffer(0);
+
+        // Get mouse position (scale from window to buffer coords)
+        int32_t mouse_x, mouse_y;
+        Platform_Mouse_GetPosition(&mouse_x, &mouse_y);
+        // Window is 2x scaled, so divide by 2
+        mouse_x /= 2;
+        mouse_y /= 2;
+
+        // Clamp to buffer bounds
+        if (mouse_x < 0) mouse_x = 0;
+        if (mouse_y < 0) mouse_y = 0;
+        if (mouse_x >= width) mouse_x = width - 1;
+        if (mouse_y >= height) mouse_y = height - 1;
+
+        // Draw crosshair at mouse position
+        for (int i = -10; i <= 10; i++) {
+            int x = mouse_x + i;
+            int y = mouse_y;
+            if (x >= 0 && x < width) {
+                pixels[y * pitch + x] = 255;
+            }
+            x = mouse_x;
+            y = mouse_y + i;
+            if (y >= 0 && y < height) {
+                pixels[y * pitch + x] = 255;
+            }
+        }
+
+        // Draw mouse button indicators (top left)
+        // Left button - bright if pressed
+        uint8_t left_color = Platform_Mouse_IsPressed(MOUSE_BUTTON_LEFT) ? 200 : 50;
+        for (int y = 10; y < 30; y++) {
+            for (int x = 10; x < 30; x++) {
+                pixels[y * pitch + x] = left_color;
+            }
+        }
+
+        // Right button
+        uint8_t right_color = Platform_Mouse_IsPressed(MOUSE_BUTTON_RIGHT) ? 150 : 50;
+        for (int y = 10; y < 30; y++) {
+            for (int x = 35; x < 55; x++) {
+                pixels[y * pitch + x] = right_color;
+            }
+        }
+
+        // Middle button
+        uint8_t middle_color = Platform_Mouse_IsPressed(MOUSE_BUTTON_MIDDLE) ? 100 : 50;
+        for (int y = 10; y < 30; y++) {
+            for (int x = 60; x < 80; x++) {
+                pixels[y * pitch + x] = middle_color;
+            }
+        }
+
+        // Draw modifier key indicators (top right area)
+        // Shift indicator
+        uint8_t shift_color = Platform_Key_ShiftDown() ? 255 : 30;
+        for (int y = 10; y < 25; y++) {
+            for (int x = width - 90; x < width - 70; x++) {
+                pixels[y * pitch + x] = shift_color;
+            }
+        }
+
+        // Ctrl indicator
+        uint8_t ctrl_color = Platform_Key_CtrlDown() ? 255 : 30;
+        for (int y = 10; y < 25; y++) {
+            for (int x = width - 65; x < width - 45; x++) {
+                pixels[y * pitch + x] = ctrl_color;
+            }
+        }
+
+        // Alt indicator
+        uint8_t alt_color = Platform_Key_AltDown() ? 255 : 30;
+        for (int y = 10; y < 25; y++) {
+            for (int x = width - 40; x < width - 20; x++) {
+                pixels[y * pitch + x] = alt_color;
             }
         }
 
         // Draw border
         for (int x = 0; x < width; x++) {
-            pixels[x] = 255;  // Top
-            pixels[(height - 1) * pitch + x] = 255;  // Bottom
+            pixels[x] = 128;
+            pixels[(height - 1) * pitch + x] = 128;
         }
         for (int y = 0; y < height; y++) {
-            pixels[y * pitch] = 255;  // Left
-            pixels[y * pitch + width - 1] = 255;  // Right
+            pixels[y * pitch] = 128;
+            pixels[y * pitch + width - 1] = 128;
+        }
+
+        // Check for double-click (flash screen)
+        if (Platform_Mouse_WasDoubleClicked(MOUSE_BUTTON_LEFT)) {
+            // Flash the border bright
+            for (int x = 0; x < width; x++) {
+                pixels[x] = 255;
+                pixels[(height - 1) * pitch + x] = 255;
+            }
+            for (int y = 0; y < height; y++) {
+                pixels[y * pitch] = 255;
+                pixels[y * pitch + width - 1] = 255;
+            }
         }
 
         // Flip to screen
@@ -291,9 +413,13 @@ int run_demo() {
         frame++;
         fps_counter++;
 
-        // Print FPS every second
+        // Print status every second
         if (time - last_fps_time >= 1000) {
-            printf("\rFPS: %d    ", fps_counter);
+            printf("\rFPS: %d | Mouse: (%d,%d) | Shift:%d Ctrl:%d Alt:%d    ",
+                   fps_counter, mouse_x, mouse_y,
+                   Platform_Key_ShiftDown(),
+                   Platform_Key_CtrlDown(),
+                   Platform_Key_AltDown());
             fflush(stdout);
             fps_counter = 0;
             last_fps_time = time;
@@ -330,6 +456,13 @@ int run_tests() {
         // Re-init for graphics test
         Platform_Init();
         failures += test_graphics();
+        Platform_Shutdown();
+    }
+
+    // Input test
+    {
+        Platform_Init();
+        failures += test_input();
         Platform_Shutdown();
     }
 

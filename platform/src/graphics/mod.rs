@@ -7,6 +7,7 @@ pub use palette::{Palette, PaletteEntry};
 pub use surface::Surface;
 
 use crate::error::PlatformError;
+use crate::input;
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::render::{Canvas, TextureCreator};
 use sdl2::video::{Window, WindowContext};
@@ -333,6 +334,8 @@ pub fn is_initialized() -> bool {
 
 /// Poll events and return true if quit was requested
 pub fn poll_events() -> bool {
+    let ticks = get_ticks();
+
     with_sdl(|sdl| {
         let mut event_pump = match sdl.event_pump() {
             Ok(pump) => pump,
@@ -341,12 +344,38 @@ pub fn poll_events() -> bool {
 
         for event in event_pump.poll_iter() {
             match event {
-                sdl2::event::Event::Quit { .. } => return true,
-                sdl2::event::Event::KeyDown { keycode: Some(sdl2::keyboard::Keycode::Escape), .. } => return true,
+                sdl2::event::Event::Quit { .. } => {
+                    input::request_quit();
+                    return true;
+                }
+                sdl2::event::Event::KeyDown { keycode: Some(key), repeat, .. } => {
+                    input::with_input(|state| state.handle_key_down(key, repeat));
+                    if key == sdl2::keyboard::Keycode::Escape {
+                        input::request_quit();
+                        return true;
+                    }
+                }
+                sdl2::event::Event::KeyUp { keycode: Some(key), .. } => {
+                    input::with_input(|state| state.handle_key_up(key));
+                }
+                sdl2::event::Event::MouseMotion { x, y, .. } => {
+                    input::with_input(|state| state.handle_mouse_motion(x, y));
+                }
+                sdl2::event::Event::MouseButtonDown { mouse_btn, x, y, .. } => {
+                    let btn = input::sdl_to_mousebutton(mouse_btn);
+                    input::with_input(|state| state.handle_mouse_down(btn, x, y, ticks));
+                }
+                sdl2::event::Event::MouseButtonUp { mouse_btn, .. } => {
+                    let btn = input::sdl_to_mousebutton(mouse_btn);
+                    input::with_input(|state| state.handle_mouse_up(btn));
+                }
+                sdl2::event::Event::MouseWheel { y, .. } => {
+                    input::with_input(|state| state.handle_mouse_wheel(y));
+                }
                 _ => {}
             }
         }
-        false
+        input::should_quit()
     }).unwrap_or(false)
 }
 

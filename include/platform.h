@@ -24,6 +24,47 @@
 #define PLATFORM_VERSION 1
 
 /**
+ * Key codes (matching Windows VK_* values for compatibility)
+ */
+typedef enum KeyCode {
+  KEY_CODE_NONE = 0,
+  KEY_CODE_BACKSPACE = 8,
+  KEY_CODE_TAB = 9,
+  KEY_CODE_RETURN = 13,
+  KEY_CODE_SHIFT = 16,
+  KEY_CODE_CONTROL = 17,
+  KEY_CODE_ALT = 18,
+  KEY_CODE_PAUSE = 19,
+  KEY_CODE_CAPS_LOCK = 20,
+  KEY_CODE_ESCAPE = 27,
+  KEY_CODE_SPACE = 32,
+  KEY_CODE_PAGE_UP = 33,
+  KEY_CODE_PAGE_DOWN = 34,
+  KEY_CODE_END = 35,
+  KEY_CODE_HOME = 36,
+  KEY_CODE_LEFT = 37,
+  KEY_CODE_UP = 38,
+  KEY_CODE_RIGHT = 39,
+  KEY_CODE_DOWN = 40,
+  KEY_CODE_INSERT = 45,
+  KEY_CODE_DELETE = 46,
+  KEY_CODE_F1 = 112,
+  KEY_CODE_F2 = 113,
+  KEY_CODE_F3 = 114,
+  KEY_CODE_F4 = 115,
+  KEY_CODE_F5 = 116,
+  KEY_CODE_F6 = 117,
+  KEY_CODE_F7 = 118,
+  KEY_CODE_F8 = 119,
+  KEY_CODE_F9 = 120,
+  KEY_CODE_F10 = 121,
+  KEY_CODE_F11 = 122,
+  KEY_CODE_F12 = 123,
+  KEY_CODE_NUM_LOCK = 144,
+  KEY_CODE_SCROLL_LOCK = 145,
+} KeyCode;
+
+/**
  * Log level for Platform_Log
  */
 typedef enum LogLevel {
@@ -32,6 +73,15 @@ typedef enum LogLevel {
   LOG_LEVEL_WARN = 2,
   LOG_LEVEL_ERROR = 3,
 } LogLevel;
+
+/**
+ * Mouse button
+ */
+typedef enum MouseButton {
+  MOUSE_BUTTON_LEFT = 0,
+  MOUSE_BUTTON_RIGHT = 1,
+  MOUSE_BUTTON_MIDDLE = 2,
+} MouseButton;
 
 /**
  * Result type for platform operations (FFI-compatible)
@@ -314,6 +364,111 @@ void Platform_Surface_Fill(struct PlatformSurface *surface,
  * Clear entire surface
  */
 void Platform_Surface_Clear(struct PlatformSurface *surface, uint8_t color);
+
+/**
+ * Initialize input subsystem
+ */
+int32_t Platform_Input_Init(void);
+
+/**
+ * Shutdown input subsystem
+ */
+void Platform_Input_Shutdown(void);
+
+/**
+ * Update input state (call at start of each frame)
+ */
+void Platform_Input_Update(void);
+
+/**
+ * Check if quit was requested
+ */
+bool Platform_Input_ShouldQuit(void);
+
+/**
+ * Check if key is currently pressed
+ */
+bool Platform_Key_IsPressed(enum KeyCode key);
+
+/**
+ * Check if key was just pressed this frame
+ */
+bool Platform_Key_WasPressed(enum KeyCode key);
+
+/**
+ * Check if key was just released this frame
+ */
+bool Platform_Key_WasReleased(enum KeyCode key);
+
+/**
+ * Get next key event from queue (returns false if empty)
+ */
+bool Platform_Key_GetNext(enum KeyCode *key, bool *released);
+
+/**
+ * Clear key event queue
+ */
+void Platform_Key_Clear(void);
+
+/**
+ * Check if Shift is held
+ */
+bool Platform_Key_ShiftDown(void);
+
+/**
+ * Check if Ctrl is held
+ */
+bool Platform_Key_CtrlDown(void);
+
+/**
+ * Check if Alt is held
+ */
+bool Platform_Key_AltDown(void);
+
+/**
+ * Get mouse position
+ */
+void Platform_Mouse_GetPosition(int32_t *x, int32_t *y);
+
+/**
+ * Get mouse X position
+ */
+int32_t Platform_Mouse_GetX(void);
+
+/**
+ * Get mouse Y position
+ */
+int32_t Platform_Mouse_GetY(void);
+
+/**
+ * Check if mouse button is pressed
+ */
+bool Platform_Mouse_IsPressed(enum MouseButton button);
+
+/**
+ * Check if mouse button was clicked this frame
+ */
+bool Platform_Mouse_WasClicked(enum MouseButton button);
+
+/**
+ * Check if mouse button was double-clicked this frame
+ */
+bool Platform_Mouse_WasDoubleClicked(enum MouseButton button);
+
+/**
+ * Get mouse wheel delta
+ */
+int32_t Platform_Mouse_GetWheelDelta(void);
+
+/**
+ * Show mouse cursor
+ */
+void Platform_Mouse_Show(void);
+
+/**
+ * Hide mouse cursor
+ */
+void Platform_Mouse_Hide(void);
 
 #ifdef __cplusplus
 } // extern "C"
