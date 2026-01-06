@@ -1,7 +1,7 @@
-# Plan 09: Assembly Rewrites
+# Plan 09: Assembly Rewrites (Rust Implementation)
 
 ## Objective
-Convert x86 assembly routines to portable C/C++ code that runs on both Intel and Apple Silicon Macs, with optional SIMD optimizations.
+Convert x86 assembly routines to portable Rust code that runs on both Intel and Apple Silicon Macs, with optional SIMD optimizations using `std::arch` or the `packed_simd` crate.
 
 ## Current State Analysis
 
@@ -22,221 +22,423 @@ Convert x86 assembly routines to portable C/C++ code that runs on both Intel and
 ### Categories by Priority
 
 #### Priority 1: Graphics (Performance Critical)
-| File | Purpose | Lines | C++ Exists? |
-|------|---------|-------|-------------|
-| WIN32LIB/DRAWBUFF/BITBLIT.ASM | Bitmap blitting | ~500 | Partial |
-| WIN32LIB/DRAWBUFF/CLEAR.ASM | Buffer clearing | ~100 | Yes |
-| WIN32LIB/DRAWBUFF/SCALE.ASM | Scaling sprites | ~400 | Partial |
-| WIN32LIB/DRAWBUFF/REMAP.ASM | Palette remapping | ~300 | No |
-| WIN32LIB/DRAWBUFF/SHADOW.ASM | Shadow drawing | ~200 | No |
-| WIN32LIB/SHAPE/*.ASM | Shape rendering (14 files) | ~2000 | Some |
+| File | Purpose | Lines | Rust Equivalent |
+|------|---------|-------|-----------------|
+| WIN32LIB/DRAWBUFF/BITBLIT.ASM | Bitmap blitting | ~500 | `blit.rs` |
+| WIN32LIB/DRAWBUFF/CLEAR.ASM | Buffer clearing | ~100 | `slice::fill` |
+| WIN32LIB/DRAWBUFF/SCALE.ASM | Scaling sprites | ~400 | `scale.rs` |
+| WIN32LIB/DRAWBUFF/REMAP.ASM | Palette remapping | ~300 | `remap.rs` |
+| WIN32LIB/DRAWBUFF/SHADOW.ASM | Shadow drawing | ~200 | `shadow.rs` |
+| WIN32LIB/SHAPE/*.ASM | Shape rendering (14 files) | ~2000 | `shape.rs` |
 
 #### Priority 2: Audio (Medium Priority)
-| File | Purpose | Lines | C++ Exists? |
-|------|---------|-------|-------------|
-| WIN32LIB/AUDIO/AUDUNCMP.ASM | Audio decompression | ~300 | Yes (ADPCM.CPP) |
-| WIN32LIB/AUDIO/SOSCODEC.ASM | SOS codec | ~400 | Partial |
+| File | Purpose | Lines | Rust Equivalent |
+|------|---------|-------|-----------------|
+| WIN32LIB/AUDIO/AUDUNCMP.ASM | Audio decompression | ~300 | In audio.rs |
+| WIN32LIB/AUDIO/SOSCODEC.ASM | SOS codec | ~400 | In audio.rs |
 
 #### Priority 3: Compression (Required)
-| File | Purpose | Lines | C++ Exists? |
-|------|---------|-------|-------------|
-| CODE/LCWCOMP.ASM | LCW compression | ~500 | Unknown |
-| WIN32LIB/IFF/LCWUNCMP.ASM | LCW decompression | ~300 | Unknown |
+| File | Purpose | Lines | Rust Equivalent |
+|------|---------|-------|-----------------|
+| CODE/LCWCOMP.ASM | LCW compression | ~500 | `lcw.rs` |
+| WIN32LIB/IFF/LCWUNCMP.ASM | LCW decompression | ~300 | `lcw.rs` |
 
 #### Priority 4: Utilities (Low Priority)
-| File | Purpose | Lines | C++ Exists? |
-|------|---------|-------|-------------|
-| WIN32LIB/MISC/CRC.ASM | CRC calculation | ~100 | Easy to write |
-| WIN32LIB/MISC/RANDOM.ASM | Random numbers | ~50 | Easy to write |
+| File | Purpose | Lines | Rust Equivalent |
+|------|---------|-------|-----------------|
+| WIN32LIB/MISC/CRC.ASM | CRC calculation | ~100 | `crc32` crate or manual |
+| WIN32LIB/MISC/RANDOM.ASM | Random numbers | ~50 | `rand` crate or LCG |
 | CODE/CPUID.ASM | CPU detection | ~200 | Not needed |
-| WIN32LIB/MEM/MEM_COPY.ASM | Memory copy | ~100 | Use memcpy |
+| WIN32LIB/MEM/MEM_COPY.ASM | Memory copy | ~100 | `slice::copy_from_slice` |
 
 ## Implementation Strategy
 
 ### Approach
 
-1. **Find C++ equivalents first** - Many ASM files have C++ fallbacks
-2. **Rewrite in portable C++** - No inline assembly
-3. **Add SIMD later** - Use intrinsics for optimization (optional)
-4. **Test thoroughly** - Compare output with reference implementation
+1. **Implement in safe Rust first** - Use standard library where possible
+2. **Optimize with SIMD later** - Use `std::arch` for platform-specific intrinsics
+3. **Expose via FFI** - Make callable from C++ game code
+4. **Benchmark thoroughly** - Compare against reference implementation
+
+## Rust Module Structure
+
+```
+platform/src/
+├── lib.rs
+├── blit/
+│   ├── mod.rs
+│   ├── basic.rs      # Basic blitting
+│   ├── transparent.rs # Transparency handling
+│   └── simd.rs       # SIMD-optimized versions
+├── scale.rs          # Scaling routines
+├── remap.rs          # Palette remapping
+├── shadow.rs         # Shadow effects
+├── shape.rs          # Shape/sprite rendering
+├── lcw.rs            # LCW compression
+└── crc.rs            # CRC32 calculation
+```
 
 ### 9.1 Graphics Blitting
 
-File: `src/platform/graphics_blit.cpp`
-```cpp
-#include <cstdint>
-#include <cstring>
-#include <algorithm>
+File: `platform/src/blit/mod.rs`
+```rust
+//! Bitmap blitting routines (replaces BITBLIT.ASM)
 
-//=============================================================================
-// Basic Blit (replaces BITBLIT.ASM)
-//=============================================================================
+pub mod basic;
+pub mod transparent;
 
-// Copy rectangular region
-void Buffer_To_Buffer(
-    uint8_t* dest, int dest_width, int dest_height, int dest_pitch,
-    const uint8_t* src, int src_width, int src_height, int src_pitch,
-    int dest_x, int dest_y, int src_x, int src_y,
-    int width, int height)
-{
-    // Clip to destination bounds
-    if (dest_x < 0) {
-        width += dest_x;
-        src_x -= dest_x;
-        dest_x = 0;
-    }
-    if (dest_y < 0) {
-        height += dest_y;
-        src_y -= dest_y;
-        dest_y = 0;
-    }
-    if (dest_x + width > dest_width) {
-        width = dest_width - dest_x;
-    }
-    if (dest_y + height > dest_height) {
-        height = dest_height - dest_y;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub mod simd;
+
+use crate::ffi::catch_panic;
+
+/// Clipping rectangle
+#[derive(Debug, Clone, Copy)]
+pub struct ClipRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+impl ClipRect {
+    pub fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
+        Self { x, y, width, height }
     }
 
-    if (width <= 0 || height <= 0) return;
+    /// Clip source rectangle to destination bounds
+    pub fn clip_to_bounds(
+        &self,
+        dest_x: i32,
+        dest_y: i32,
+        dest_width: i32,
+        dest_height: i32,
+    ) -> Option<(ClipRect, i32, i32)> {
+        let mut src_x = self.x;
+        let mut src_y = self.y;
+        let mut width = self.width;
+        let mut height = self.height;
+        let mut dst_x = dest_x;
+        let mut dst_y = dest_y;
 
-    // Copy rows
-    uint8_t* dst_row = dest + dest_y * dest_pitch + dest_x;
-    const uint8_t* src_row = src + src_y * src_pitch + src_x;
+        // Clip left edge
+        if dst_x < 0 {
+            width += dst_x;
+            src_x -= dst_x;
+            dst_x = 0;
+        }
 
-    for (int y = 0; y < height; y++) {
-        memcpy(dst_row, src_row, width);
-        dst_row += dest_pitch;
-        src_row += src_pitch;
+        // Clip top edge
+        if dst_y < 0 {
+            height += dst_y;
+            src_y -= dst_y;
+            dst_y = 0;
+        }
+
+        // Clip right edge
+        if dst_x + width > dest_width {
+            width = dest_width - dst_x;
+        }
+
+        // Clip bottom edge
+        if dst_y + height > dest_height {
+            height = dest_height - dst_y;
+        }
+
+        if width <= 0 || height <= 0 {
+            None
+        } else {
+            Some((ClipRect::new(src_x, src_y, width, height), dst_x, dst_y))
+        }
+    }
+}
+```
+
+File: `platform/src/blit/basic.rs`
+```rust
+//! Basic blitting operations
+
+use super::ClipRect;
+
+/// Copy rectangular region from source to destination
+pub fn buffer_to_buffer(
+    dest: &mut [u8],
+    dest_pitch: usize,
+    dest_width: i32,
+    dest_height: i32,
+    src: &[u8],
+    src_pitch: usize,
+    dest_x: i32,
+    dest_y: i32,
+    src_rect: ClipRect,
+) {
+    let Some((clipped, dst_x, dst_y)) = src_rect.clip_to_bounds(
+        dest_x, dest_y, dest_width, dest_height
+    ) else {
+        return;
+    };
+
+    let dst_x = dst_x as usize;
+    let dst_y = dst_y as usize;
+    let src_x = clipped.x as usize;
+    let src_y = clipped.y as usize;
+    let width = clipped.width as usize;
+    let height = clipped.height as usize;
+
+    for row in 0..height {
+        let dst_offset = (dst_y + row) * dest_pitch + dst_x;
+        let src_offset = (src_y + row) * src_pitch + src_x;
+
+        if dst_offset + width <= dest.len() && src_offset + width <= src.len() {
+            dest[dst_offset..dst_offset + width]
+                .copy_from_slice(&src[src_offset..src_offset + width]);
+        }
     }
 }
 
-// Transparent blit (skip color 0)
-void Buffer_To_Buffer_Trans(
-    uint8_t* dest, int dest_pitch,
-    const uint8_t* src, int src_pitch,
-    int dest_x, int dest_y,
-    int width, int height)
-{
-    uint8_t* dst_row = dest + dest_y * dest_pitch + dest_x;
-    const uint8_t* src_row = src;
+/// Fill buffer with a single value
+#[inline]
+pub fn buffer_clear(buffer: &mut [u8], value: u8) {
+    buffer.fill(value);
+}
 
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            uint8_t pixel = src_row[x];
-            if (pixel != 0) {
-                dst_row[x] = pixel;
+/// Fill rectangular region with a value
+pub fn buffer_fill_rect(
+    buffer: &mut [u8],
+    pitch: usize,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    value: u8,
+) {
+    for row in 0..height {
+        let offset = (y + row) * pitch + x;
+        if offset + width <= buffer.len() {
+            buffer[offset..offset + width].fill(value);
+        }
+    }
+}
+```
+
+File: `platform/src/blit/transparent.rs`
+```rust
+//! Transparent blitting (skip color 0)
+
+/// Blit with transparency (color 0 = transparent)
+pub fn buffer_to_buffer_trans(
+    dest: &mut [u8],
+    dest_pitch: usize,
+    src: &[u8],
+    src_pitch: usize,
+    dest_x: usize,
+    dest_y: usize,
+    width: usize,
+    height: usize,
+) {
+    for row in 0..height {
+        let dst_offset = (dest_y + row) * dest_pitch + dest_x;
+        let src_offset = row * src_pitch;
+
+        for col in 0..width {
+            let src_idx = src_offset + col;
+            let dst_idx = dst_offset + col;
+
+            if src_idx < src.len() && dst_idx < dest.len() {
+                let pixel = src[src_idx];
+                if pixel != 0 {
+                    dest[dst_idx] = pixel;
+                }
             }
         }
-        dst_row += dest_pitch;
-        src_row += src_pitch;
+    }
+}
+
+/// Blit with transparency and color key
+pub fn buffer_to_buffer_trans_key(
+    dest: &mut [u8],
+    dest_pitch: usize,
+    src: &[u8],
+    src_pitch: usize,
+    dest_x: usize,
+    dest_y: usize,
+    width: usize,
+    height: usize,
+    transparent_color: u8,
+) {
+    for row in 0..height {
+        let dst_offset = (dest_y + row) * dest_pitch + dest_x;
+        let src_offset = row * src_pitch;
+
+        for col in 0..width {
+            let src_idx = src_offset + col;
+            let dst_idx = dst_offset + col;
+
+            if src_idx < src.len() && dst_idx < dest.len() {
+                let pixel = src[src_idx];
+                if pixel != transparent_color {
+                    dest[dst_idx] = pixel;
+                }
+            }
+        }
     }
 }
 ```
 
 ### 9.2 Palette Remapping
 
-```cpp
-//=============================================================================
-// Palette Remap (replaces REMAP.ASM)
-//=============================================================================
+File: `platform/src/remap.rs`
+```rust
+//! Palette remapping (replaces REMAP.ASM)
 
-// Remap colors through a lookup table
-void Buffer_Remap(
-    uint8_t* buffer, int pitch, int width, int height,
-    const uint8_t* remap_table)
-{
-    for (int y = 0; y < height; y++) {
-        uint8_t* row = buffer + y * pitch;
-        for (int x = 0; x < width; x++) {
-            row[x] = remap_table[row[x]];
+/// Remap colors through a lookup table
+pub fn buffer_remap(
+    buffer: &mut [u8],
+    pitch: usize,
+    width: usize,
+    height: usize,
+    remap_table: &[u8; 256],
+) {
+    for row in 0..height {
+        let offset = row * pitch;
+        for col in 0..width {
+            let idx = offset + col;
+            if idx < buffer.len() {
+                buffer[idx] = remap_table[buffer[idx] as usize];
+            }
         }
     }
 }
 
-// Remap with transparency
-void Buffer_Remap_Trans(
-    uint8_t* buffer, int pitch, int width, int height,
-    const uint8_t* remap_table)
-{
-    for (int y = 0; y < height; y++) {
-        uint8_t* row = buffer + y * pitch;
-        for (int x = 0; x < width; x++) {
-            uint8_t pixel = row[x];
-            if (pixel != 0) {
-                row[x] = remap_table[pixel];
+/// Remap colors with transparency (skip color 0)
+pub fn buffer_remap_trans(
+    buffer: &mut [u8],
+    pitch: usize,
+    width: usize,
+    height: usize,
+    remap_table: &[u8; 256],
+) {
+    for row in 0..height {
+        let offset = row * pitch;
+        for col in 0..width {
+            let idx = offset + col;
+            if idx < buffer.len() {
+                let pixel = buffer[idx];
+                if pixel != 0 {
+                    buffer[idx] = remap_table[pixel as usize];
+                }
             }
         }
     }
+}
+
+/// Apply remap to source, write to destination
+pub fn buffer_remap_copy(
+    dest: &mut [u8],
+    src: &[u8],
+    remap_table: &[u8; 256],
+) {
+    for (d, s) in dest.iter_mut().zip(src.iter()) {
+        *d = remap_table[*s as usize];
+    }
+}
+
+// =============================================================================
+// FFI Exports
+// =============================================================================
+
+/// Remap buffer colors through lookup table
+///
+/// # Safety
+/// - `buffer` must point to valid memory of at least `pitch * height` bytes
+/// - `remap_table` must point to exactly 256 bytes
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Buffer_Remap(
+    buffer: *mut u8,
+    pitch: i32,
+    width: i32,
+    height: i32,
+    remap_table: *const u8,
+) -> i32 {
+    crate::ffi::catch_panic(|| {
+        if buffer.is_null() || remap_table.is_null() {
+            return Err(crate::PlatformError::NullPointer);
+        }
+
+        let buf_len = (pitch * height) as usize;
+        let buffer_slice = std::slice::from_raw_parts_mut(buffer, buf_len);
+        let table: &[u8; 256] = &*(remap_table as *const [u8; 256]);
+
+        buffer_remap(
+            buffer_slice,
+            pitch as usize,
+            width as usize,
+            height as usize,
+            table,
+        );
+
+        Ok(())
+    })
 }
 ```
 
 ### 9.3 Scaling
 
-```cpp
-//=============================================================================
-// Scaling (replaces SCALE.ASM)
-//=============================================================================
+File: `platform/src/scale.rs`
+```rust
+//! Scaling routines (replaces SCALE.ASM)
 
-// Scale source to destination using nearest neighbor
-void Buffer_Scale(
-    uint8_t* dest, int dest_width, int dest_height, int dest_pitch,
-    const uint8_t* src, int src_width, int src_height, int src_pitch,
-    int dest_x, int dest_y, int scale_width, int scale_height)
-{
-    if (scale_width <= 0 || scale_height <= 0) return;
+use crate::blit::ClipRect;
+
+/// Scale source to destination using nearest neighbor
+pub fn buffer_scale(
+    dest: &mut [u8],
+    dest_pitch: usize,
+    dest_width: i32,
+    dest_height: i32,
+    src: &[u8],
+    src_pitch: usize,
+    src_width: i32,
+    src_height: i32,
+    dest_x: i32,
+    dest_y: i32,
+    scale_width: i32,
+    scale_height: i32,
+) {
+    if scale_width <= 0 || scale_height <= 0 || src_width <= 0 || src_height <= 0 {
+        return;
+    }
 
     // Fixed-point scaling factors (16.16)
-    int x_ratio = (src_width << 16) / scale_width;
-    int y_ratio = (src_height << 16) / scale_height;
+    let x_ratio = ((src_width as u32) << 16) / scale_width as u32;
+    let y_ratio = ((src_height as u32) << 16) / scale_height as u32;
 
-    int y_accum = 0;
-    for (int y = 0; y < scale_height; y++) {
-        if (dest_y + y < 0 || dest_y + y >= dest_height) {
+    let mut y_accum: u32 = 0;
+
+    for y in 0..scale_height {
+        let dst_y = dest_y + y;
+
+        if dst_y < 0 || dst_y >= dest_height {
             y_accum += y_ratio;
             continue;
         }
 
-        uint8_t* dst_row = dest + (dest_y + y) * dest_pitch + dest_x;
-        const uint8_t* src_row = src + (y_accum >> 16) * src_pitch;
+        let src_y = (y_accum >> 16) as usize;
+        let dst_row_offset = (dst_y as usize) * dest_pitch;
+        let src_row_offset = src_y * src_pitch;
 
-        int x_accum = 0;
-        for (int x = 0; x < scale_width; x++) {
-            if (dest_x + x >= 0 && dest_x + x < dest_width) {
-                dst_row[x] = src_row[x_accum >> 16];
-            }
-            x_accum += x_ratio;
-        }
-        y_accum += y_ratio;
-    }
-}
+        let mut x_accum: u32 = 0;
 
-// Scale with transparency
-void Buffer_Scale_Trans(
-    uint8_t* dest, int dest_width, int dest_height, int dest_pitch,
-    const uint8_t* src, int src_width, int src_height, int src_pitch,
-    int dest_x, int dest_y, int scale_width, int scale_height)
-{
-    if (scale_width <= 0 || scale_height <= 0) return;
+        for x in 0..scale_width {
+            let dst_x = dest_x + x;
 
-    int x_ratio = (src_width << 16) / scale_width;
-    int y_ratio = (src_height << 16) / scale_height;
+            if dst_x >= 0 && dst_x < dest_width {
+                let src_x = (x_accum >> 16) as usize;
+                let dst_idx = dst_row_offset + dst_x as usize;
+                let src_idx = src_row_offset + src_x;
 
-    int y_accum = 0;
-    for (int y = 0; y < scale_height; y++) {
-        if (dest_y + y < 0 || dest_y + y >= dest_height) {
-            y_accum += y_ratio;
-            continue;
-        }
-
-        uint8_t* dst_row = dest + (dest_y + y) * dest_pitch + dest_x;
-        const uint8_t* src_row = src + (y_accum >> 16) * src_pitch;
-
-        int x_accum = 0;
-        for (int x = 0; x < scale_width; x++) {
-            if (dest_x + x >= 0 && dest_x + x < dest_width) {
-                uint8_t pixel = src_row[x_accum >> 16];
-                if (pixel != 0) {
-                    dst_row[x] = pixel;
+                if dst_idx < dest.len() && src_idx < src.len() {
+                    dest[dst_idx] = src[src_idx];
                 }
             }
             x_accum += x_ratio;
@@ -244,266 +446,657 @@ void Buffer_Scale_Trans(
         y_accum += y_ratio;
     }
 }
+
+/// Scale with transparency (skip color 0)
+pub fn buffer_scale_trans(
+    dest: &mut [u8],
+    dest_pitch: usize,
+    dest_width: i32,
+    dest_height: i32,
+    src: &[u8],
+    src_pitch: usize,
+    src_width: i32,
+    src_height: i32,
+    dest_x: i32,
+    dest_y: i32,
+    scale_width: i32,
+    scale_height: i32,
+) {
+    if scale_width <= 0 || scale_height <= 0 || src_width <= 0 || src_height <= 0 {
+        return;
+    }
+
+    let x_ratio = ((src_width as u32) << 16) / scale_width as u32;
+    let y_ratio = ((src_height as u32) << 16) / scale_height as u32;
+
+    let mut y_accum: u32 = 0;
+
+    for y in 0..scale_height {
+        let dst_y = dest_y + y;
+
+        if dst_y < 0 || dst_y >= dest_height {
+            y_accum += y_ratio;
+            continue;
+        }
+
+        let src_y = (y_accum >> 16) as usize;
+        let dst_row_offset = (dst_y as usize) * dest_pitch;
+        let src_row_offset = src_y * src_pitch;
+
+        let mut x_accum: u32 = 0;
+
+        for x in 0..scale_width {
+            let dst_x = dest_x + x;
+
+            if dst_x >= 0 && dst_x < dest_width {
+                let src_x = (x_accum >> 16) as usize;
+                let dst_idx = dst_row_offset + dst_x as usize;
+                let src_idx = src_row_offset + src_x;
+
+                if dst_idx < dest.len() && src_idx < src.len() {
+                    let pixel = src[src_idx];
+                    if pixel != 0 {
+                        dest[dst_idx] = pixel;
+                    }
+                }
+            }
+            x_accum += x_ratio;
+        }
+        y_accum += y_ratio;
+    }
+}
+
+// =============================================================================
+// FFI Exports
+// =============================================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Buffer_Scale(
+    dest: *mut u8,
+    dest_pitch: i32,
+    dest_width: i32,
+    dest_height: i32,
+    src: *const u8,
+    src_pitch: i32,
+    src_width: i32,
+    src_height: i32,
+    dest_x: i32,
+    dest_y: i32,
+    scale_width: i32,
+    scale_height: i32,
+    transparent: i32,
+) -> i32 {
+    crate::ffi::catch_panic(|| {
+        if dest.is_null() || src.is_null() {
+            return Err(crate::PlatformError::NullPointer);
+        }
+
+        let dest_len = (dest_pitch * dest_height) as usize;
+        let src_len = (src_pitch * src_height) as usize;
+        let dest_slice = std::slice::from_raw_parts_mut(dest, dest_len);
+        let src_slice = std::slice::from_raw_parts(src, src_len);
+
+        if transparent != 0 {
+            buffer_scale_trans(
+                dest_slice, dest_pitch as usize, dest_width, dest_height,
+                src_slice, src_pitch as usize, src_width, src_height,
+                dest_x, dest_y, scale_width, scale_height,
+            );
+        } else {
+            buffer_scale(
+                dest_slice, dest_pitch as usize, dest_width, dest_height,
+                src_slice, src_pitch as usize, src_width, src_height,
+                dest_x, dest_y, scale_width, scale_height,
+            );
+        }
+
+        Ok(())
+    })
+}
 ```
 
 ### 9.4 Shadow Drawing
 
-```cpp
-//=============================================================================
-// Shadow (replaces SHADOW.ASM)
-//=============================================================================
+File: `platform/src/shadow.rs`
+```rust
+//! Shadow drawing (replaces SHADOW.ASM)
 
-// Draw shadow (darken existing pixels)
-void Buffer_Shadow(
-    uint8_t* buffer, int pitch, int x, int y, int width, int height,
-    const uint8_t* shadow_table)  // 256-byte table mapping colors to darker versions
-{
-    for (int row = 0; row < height; row++) {
-        uint8_t* ptr = buffer + (y + row) * pitch + x;
-        for (int col = 0; col < width; col++) {
-            ptr[col] = shadow_table[ptr[col]];
+/// Draw shadow by darkening existing pixels
+pub fn buffer_shadow(
+    buffer: &mut [u8],
+    pitch: usize,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    shadow_table: &[u8; 256],
+) {
+    for row in 0..height {
+        let offset = (y + row) * pitch + x;
+        for col in 0..width {
+            let idx = offset + col;
+            if idx < buffer.len() {
+                buffer[idx] = shadow_table[buffer[idx] as usize];
+            }
         }
     }
 }
 
-// Draw shadow with mask
-void Buffer_Shadow_Mask(
-    uint8_t* buffer, int buffer_pitch,
-    const uint8_t* mask, int mask_pitch,
-    int x, int y, int width, int height,
-    const uint8_t* shadow_table)
-{
-    for (int row = 0; row < height; row++) {
-        uint8_t* dst = buffer + (y + row) * buffer_pitch + x;
-        const uint8_t* msk = mask + row * mask_pitch;
+/// Draw shadow with mask (only darken where mask is non-zero)
+pub fn buffer_shadow_mask(
+    buffer: &mut [u8],
+    buffer_pitch: usize,
+    mask: &[u8],
+    mask_pitch: usize,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    shadow_table: &[u8; 256],
+) {
+    for row in 0..height {
+        let buf_offset = (y + row) * buffer_pitch + x;
+        let mask_offset = row * mask_pitch;
 
-        for (int col = 0; col < width; col++) {
-            if (msk[col] != 0) {
-                dst[col] = shadow_table[dst[col]];
+        for col in 0..width {
+            let mask_idx = mask_offset + col;
+            let buf_idx = buf_offset + col;
+
+            if mask_idx < mask.len() && buf_idx < buffer.len() {
+                if mask[mask_idx] != 0 {
+                    buffer[buf_idx] = shadow_table[buffer[buf_idx] as usize];
+                }
             }
         }
     }
+}
+
+/// Generate standard shadow lookup table (darken by 50%)
+pub fn generate_shadow_table(palette: &[[u8; 3]; 256]) -> [u8; 256] {
+    let mut table = [0u8; 256];
+
+    for i in 0..256 {
+        // Find the closest darker color
+        let target_r = palette[i][0] / 2;
+        let target_g = palette[i][1] / 2;
+        let target_b = palette[i][2] / 2;
+
+        let mut best_idx = 0;
+        let mut best_dist = u32::MAX;
+
+        for j in 0..256 {
+            let dr = (palette[j][0] as i32 - target_r as i32).abs() as u32;
+            let dg = (palette[j][1] as i32 - target_g as i32).abs() as u32;
+            let db = (palette[j][2] as i32 - target_b as i32).abs() as u32;
+            let dist = dr * dr + dg * dg + db * db;
+
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = j;
+            }
+        }
+
+        table[i] = best_idx as u8;
+    }
+
+    table
 }
 ```
 
 ### 9.5 LCW Compression/Decompression
 
-```cpp
-//=============================================================================
-// LCW Decompression (replaces LCWUNCMP.ASM)
-//=============================================================================
+File: `platform/src/lcw.rs`
+```rust
+//! LCW compression/decompression (replaces LCWCOMP.ASM, LCWUNCMP.ASM)
+//!
+//! LCW is a variant of LZSS compression used by Westwood Studios.
 
-// LCW is a variant of LZSS compression
-int LCW_Uncomp(const uint8_t* source, uint8_t* dest, int dest_size) {
-    const uint8_t* src = source;
-    uint8_t* dst = dest;
-    uint8_t* dst_end = dest + dest_size;
+use crate::PlatformError;
 
-    while (dst < dst_end) {
-        uint8_t cmd = *src++;
+/// Decompress LCW-compressed data
+pub fn lcw_decompress(source: &[u8], dest: &mut [u8]) -> Result<usize, PlatformError> {
+    let mut src_pos = 0;
+    let mut dst_pos = 0;
 
-        if (cmd & 0x80) {
-            // Copy from source
-            int count = cmd & 0x3F;
-            if (cmd & 0x40) {
-                // Long count
-                count = (count << 8) | *src++;
+    while src_pos < source.len() && dst_pos < dest.len() {
+        let cmd = source[src_pos];
+        src_pos += 1;
+
+        if cmd & 0x80 != 0 {
+            // Copy from source (literal bytes)
+            let mut count = (cmd & 0x3F) as usize;
+
+            if cmd & 0x40 != 0 {
+                // Extended count
+                if src_pos >= source.len() {
+                    return Err(PlatformError::InvalidData);
+                }
+                count = (count << 8) | source[src_pos] as usize;
+                src_pos += 1;
             }
-            count++;
+            count += 1;
 
-            while (count-- > 0 && dst < dst_end) {
-                *dst++ = *src++;
+            // Copy literal bytes
+            for _ in 0..count {
+                if src_pos >= source.len() || dst_pos >= dest.len() {
+                    break;
+                }
+                dest[dst_pos] = source[src_pos];
+                dst_pos += 1;
+                src_pos += 1;
             }
+        } else if cmd == 0 {
+            // End of data
+            break;
         } else {
             // Copy from destination (back-reference)
-            int count = (cmd >> 4) + 3;
-            int offset = ((cmd & 0x0F) << 8) | *src++;
+            let count = ((cmd >> 4) + 3) as usize;
 
-            const uint8_t* ref = dst - offset;
-            while (count-- > 0 && dst < dst_end) {
-                *dst++ = *ref++;
+            if src_pos >= source.len() {
+                return Err(PlatformError::InvalidData);
+            }
+
+            let offset = (((cmd & 0x0F) as usize) << 8) | source[src_pos] as usize;
+            src_pos += 1;
+
+            if offset > dst_pos {
+                return Err(PlatformError::InvalidData);
+            }
+
+            let ref_pos = dst_pos - offset;
+
+            // Copy from back-reference (handle overlapping)
+            for i in 0..count {
+                if dst_pos >= dest.len() {
+                    break;
+                }
+                dest[dst_pos] = dest[ref_pos + i];
+                dst_pos += 1;
             }
         }
     }
 
-    return (int)(dst - dest);
+    Ok(dst_pos)
 }
 
-// LCW Compression
-int LCW_Comp(const uint8_t* source, uint8_t* dest, int source_size) {
-    // Compression is more complex - implement if needed
-    // For now, store uncompressed
-    memcpy(dest, source, source_size);
-    return source_size;
+/// Compress data using LCW algorithm
+///
+/// Returns the compressed size, or error if destination is too small
+pub fn lcw_compress(source: &[u8], dest: &mut [u8]) -> Result<usize, PlatformError> {
+    // Simple implementation: mostly literal with basic back-references
+    // A production implementation would use better matching
+
+    let mut src_pos = 0;
+    let mut dst_pos = 0;
+
+    while src_pos < source.len() {
+        // Try to find a back-reference
+        let mut best_length = 0;
+        let mut best_offset = 0;
+
+        let search_start = src_pos.saturating_sub(4095);
+
+        for ref_pos in search_start..src_pos {
+            let mut length = 0;
+            while src_pos + length < source.len()
+                && length < 18  // Max match length for short form
+                && source[ref_pos + length] == source[src_pos + length]
+            {
+                length += 1;
+            }
+
+            if length >= 3 && length > best_length {
+                best_length = length;
+                best_offset = src_pos - ref_pos;
+            }
+        }
+
+        if best_length >= 3 {
+            // Emit back-reference
+            if dst_pos + 2 > dest.len() {
+                return Err(PlatformError::BufferTooSmall);
+            }
+
+            let cmd = (((best_length - 3) & 0x0F) << 4) | ((best_offset >> 8) & 0x0F);
+            dest[dst_pos] = cmd as u8;
+            dest[dst_pos + 1] = (best_offset & 0xFF) as u8;
+            dst_pos += 2;
+            src_pos += best_length;
+        } else {
+            // Emit literal
+            // Find how many literals to emit
+            let mut literal_count = 1;
+            while src_pos + literal_count < source.len() && literal_count < 63 {
+                // Check if next position would benefit from back-reference
+                // (simplified: just emit up to 63 literals)
+                literal_count += 1;
+            }
+
+            if dst_pos + 1 + literal_count > dest.len() {
+                return Err(PlatformError::BufferTooSmall);
+            }
+
+            dest[dst_pos] = 0x80 | ((literal_count - 1) as u8);
+            dst_pos += 1;
+
+            for _ in 0..literal_count {
+                dest[dst_pos] = source[src_pos];
+                dst_pos += 1;
+                src_pos += 1;
+            }
+        }
+    }
+
+    // End marker
+    if dst_pos >= dest.len() {
+        return Err(PlatformError::BufferTooSmall);
+    }
+    dest[dst_pos] = 0;
+    dst_pos += 1;
+
+    Ok(dst_pos)
+}
+
+// =============================================================================
+// FFI Exports
+// =============================================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn Platform_LCW_Uncompress(
+    source: *const u8,
+    source_size: i32,
+    dest: *mut u8,
+    dest_size: i32,
+) -> i32 {
+    if source.is_null() || dest.is_null() {
+        return -1;
+    }
+
+    let src_slice = std::slice::from_raw_parts(source, source_size as usize);
+    let dst_slice = std::slice::from_raw_parts_mut(dest, dest_size as usize);
+
+    match lcw_decompress(src_slice, dst_slice) {
+        Ok(size) => size as i32,
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn Platform_LCW_Compress(
+    source: *const u8,
+    source_size: i32,
+    dest: *mut u8,
+    dest_size: i32,
+) -> i32 {
+    if source.is_null() || dest.is_null() {
+        return -1;
+    }
+
+    let src_slice = std::slice::from_raw_parts(source, source_size as usize);
+    let dst_slice = std::slice::from_raw_parts_mut(dest, dest_size as usize);
+
+    match lcw_compress(src_slice, dst_slice) {
+        Ok(size) => size as i32,
+        Err(_) => -1,
+    }
 }
 ```
 
 ### 9.6 CRC and Random
 
-```cpp
-//=============================================================================
-// CRC32 (replaces CRC.ASM)
-//=============================================================================
+File: `platform/src/crc.rs`
+```rust
+//! CRC32 calculation (replaces CRC.ASM)
 
-static uint32_t crc_table[256];
-static bool crc_table_initialized = false;
+use once_cell::sync::Lazy;
 
-void CRC_Init() {
-    if (crc_table_initialized) return;
+/// Pre-computed CRC32 table
+static CRC_TABLE: Lazy<[u32; 256]> = Lazy::new(|| {
+    let mut table = [0u32; 256];
 
-    for (int i = 0; i < 256; i++) {
-        uint32_t crc = i;
-        for (int j = 0; j < 8; j++) {
-            if (crc & 1)
+    for i in 0..256 {
+        let mut crc = i as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
                 crc = (crc >> 1) ^ 0xEDB88320;
-            else
+            } else {
                 crc >>= 1;
-        }
-        crc_table[i] = crc;
-    }
-    crc_table_initialized = true;
-}
-
-uint32_t CRC_Memory(const void* data, int size) {
-    CRC_Init();
-
-    uint32_t crc = 0xFFFFFFFF;
-    const uint8_t* bytes = (const uint8_t*)data;
-
-    for (int i = 0; i < size; i++) {
-        crc = crc_table[(crc ^ bytes[i]) & 0xFF] ^ (crc >> 8);
-    }
-
-    return crc ^ 0xFFFFFFFF;
-}
-
-//=============================================================================
-// Random Number Generator (replaces RANDOM.ASM)
-//=============================================================================
-
-static uint32_t random_seed = 12345;
-
-void Random_Seed(uint32_t seed) {
-    random_seed = seed;
-}
-
-uint32_t Random_Get() {
-    // Linear congruential generator
-    random_seed = random_seed * 1103515245 + 12345;
-    return (random_seed >> 16) & 0x7FFF;
-}
-
-int Random_Range(int min, int max) {
-    if (min >= max) return min;
-    return min + (Random_Get() % (max - min + 1));
-}
-```
-
-### 9.7 Shape Drawing (Most Complex)
-
-```cpp
-//=============================================================================
-// Shape Drawing (replaces SHAPE/*.ASM)
-//=============================================================================
-
-// Shape data format (simplified)
-struct ShapeHeader {
-    uint16_t width;
-    uint16_t height;
-    uint16_t flags;
-    // Followed by pixel data
-};
-
-void Draw_Shape(
-    uint8_t* buffer, int buffer_pitch, int buffer_width, int buffer_height,
-    const uint8_t* shape_data, int x, int y,
-    const uint8_t* remap_table,     // Optional color remapping
-    const uint8_t* shadow_table,    // Optional shadow
-    int flags)                       // Drawing flags
-{
-    const ShapeHeader* header = (const ShapeHeader*)shape_data;
-    const uint8_t* pixels = shape_data + sizeof(ShapeHeader);
-
-    int width = header->width;
-    int height = header->height;
-
-    // Clip to buffer
-    int clip_left = std::max(0, -x);
-    int clip_top = std::max(0, -y);
-    int clip_right = std::max(0, (x + width) - buffer_width);
-    int clip_bottom = std::max(0, (y + height) - buffer_height);
-
-    int draw_width = width - clip_left - clip_right;
-    int draw_height = height - clip_top - clip_bottom;
-
-    if (draw_width <= 0 || draw_height <= 0) return;
-
-    for (int row = 0; row < draw_height; row++) {
-        int src_y = clip_top + row;
-        int dst_y = y + clip_top + row;
-
-        uint8_t* dst = buffer + dst_y * buffer_pitch + x + clip_left;
-        const uint8_t* src = pixels + src_y * width + clip_left;
-
-        for (int col = 0; col < draw_width; col++) {
-            uint8_t pixel = src[col];
-
-            // Skip transparent pixels
-            if (pixel == 0) continue;
-
-            // Apply remapping if specified
-            if (remap_table) {
-                pixel = remap_table[pixel];
             }
-
-            dst[col] = pixel;
         }
+        table[i] = crc;
     }
+
+    table
+});
+
+/// Calculate CRC32 of a byte slice
+pub fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFFFFFF_u32;
+
+    for &byte in data {
+        let index = ((crc ^ byte as u32) & 0xFF) as usize;
+        crc = CRC_TABLE[index] ^ (crc >> 8);
+    }
+
+    crc ^ 0xFFFFFFFF
+}
+
+/// Update existing CRC with more data
+pub fn crc32_update(crc: u32, data: &[u8]) -> u32 {
+    let mut crc = crc ^ 0xFFFFFFFF;
+
+    for &byte in data {
+        let index = ((crc ^ byte as u32) & 0xFF) as usize;
+        crc = CRC_TABLE[index] ^ (crc >> 8);
+    }
+
+    crc ^ 0xFFFFFFFF
+}
+
+// =============================================================================
+// FFI Exports
+// =============================================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn Platform_CRC32(data: *const u8, size: i32) -> u32 {
+    if data.is_null() || size <= 0 {
+        return 0;
+    }
+
+    let slice = std::slice::from_raw_parts(data, size as usize);
+    crc32(slice)
 }
 ```
 
-## SIMD Optimization (Optional Future Work)
+File: `platform/src/random.rs`
+```rust
+//! Random number generation (replaces RANDOM.ASM)
+//!
+//! Uses Linear Congruential Generator for compatibility with original game.
 
-For performance-critical paths on x86_64, use SSE/AVX:
+use std::sync::atomic::{AtomicU32, Ordering};
 
-```cpp
-#ifdef __SSE2__
-#include <emmintrin.h>
+/// Global random seed (thread-safe)
+static RANDOM_SEED: AtomicU32 = AtomicU32::new(12345);
 
-void Buffer_Clear_SSE2(uint8_t* buffer, int size, uint8_t value) {
-    __m128i fill = _mm_set1_epi8(value);
+/// Seed the random number generator
+pub fn seed(value: u32) {
+    RANDOM_SEED.store(value, Ordering::SeqCst);
+}
+
+/// Get next random number (0-32767)
+pub fn next() -> u32 {
+    // LCG: same constants as original for compatibility
+    let seed = RANDOM_SEED.load(Ordering::SeqCst);
+    let new_seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+    RANDOM_SEED.store(new_seed, Ordering::SeqCst);
+    (new_seed >> 16) & 0x7FFF
+}
+
+/// Get random number in range [min, max]
+pub fn range(min: i32, max: i32) -> i32 {
+    if min >= max {
+        return min;
+    }
+    min + (next() as i32 % (max - min + 1))
+}
+
+// =============================================================================
+// FFI Exports
+// =============================================================================
+
+#[no_mangle]
+pub extern "C" fn Platform_Random_Seed(seed_value: u32) {
+    seed(seed_value);
+}
+
+#[no_mangle]
+pub extern "C" fn Platform_Random_Get() -> u32 {
+    next()
+}
+
+#[no_mangle]
+pub extern "C" fn Platform_Random_Range(min: i32, max: i32) -> i32 {
+    range(min, max)
+}
+```
+
+### 9.7 SIMD Optimizations (Optional)
+
+File: `platform/src/blit/simd.rs`
+```rust
+//! SIMD-optimized blitting routines
+//!
+//! Uses std::arch for platform-specific SIMD intrinsics.
+//! Falls back to scalar code on unsupported platforms.
+
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::*;
+
+/// Clear buffer with SIMD (x86_64 SSE2)
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+pub unsafe fn buffer_clear_simd(buffer: &mut [u8], value: u8) {
+    let fill = _mm_set1_epi8(value as i8);
+    let mut ptr = buffer.as_mut_ptr();
+    let mut remaining = buffer.len();
 
     // Align to 16 bytes
-    while (((uintptr_t)buffer & 15) && size > 0) {
-        *buffer++ = value;
-        size--;
+    while (ptr as usize & 15) != 0 && remaining > 0 {
+        *ptr = value;
+        ptr = ptr.add(1);
+        remaining -= 1;
     }
 
     // Process 16 bytes at a time
-    while (size >= 16) {
-        _mm_store_si128((__m128i*)buffer, fill);
-        buffer += 16;
-        size -= 16;
+    while remaining >= 16 {
+        _mm_store_si128(ptr as *mut __m128i, fill);
+        ptr = ptr.add(16);
+        remaining -= 16;
     }
 
     // Handle remainder
-    while (size > 0) {
-        *buffer++ = value;
-        size--;
+    while remaining > 0 {
+        *ptr = value;
+        ptr = ptr.add(1);
+        remaining -= 1;
     }
 }
-#endif
+
+/// Clear buffer with SIMD (ARM NEON)
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+pub unsafe fn buffer_clear_simd(buffer: &mut [u8], value: u8) {
+    let fill = vdupq_n_u8(value);
+    let mut ptr = buffer.as_mut_ptr();
+    let mut remaining = buffer.len();
+
+    // Align to 16 bytes
+    while (ptr as usize & 15) != 0 && remaining > 0 {
+        *ptr = value;
+        ptr = ptr.add(1);
+        remaining -= 1;
+    }
+
+    // Process 16 bytes at a time
+    while remaining >= 16 {
+        vst1q_u8(ptr, fill);
+        ptr = ptr.add(16);
+        remaining -= 16;
+    }
+
+    // Handle remainder
+    while remaining > 0 {
+        *ptr = value;
+        ptr = ptr.add(1);
+        remaining -= 1;
+    }
+}
+
+/// Remap buffer with SIMD lookup (x86_64 SSSE3)
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "ssse3")]
+pub unsafe fn buffer_remap_simd(
+    buffer: &mut [u8],
+    remap_table: &[u8; 256],
+) {
+    // PSHUFB-based lookup for 16 values at a time
+    // Split table into 16 chunks of 16 bytes each for low nibble lookup
+    let mut tables_lo: [__m128i; 16] = std::mem::zeroed();
+    let mut tables_hi: [__m128i; 16] = std::mem::zeroed();
+
+    for i in 0..16 {
+        let mut lo_bytes = [0u8; 16];
+        let mut hi_bytes = [0u8; 16];
+        for j in 0..16 {
+            lo_bytes[j] = remap_table[i * 16 + j];
+            hi_bytes[j] = remap_table[i * 16 + j];
+        }
+        tables_lo[i] = _mm_loadu_si128(lo_bytes.as_ptr() as *const __m128i);
+        tables_hi[i] = _mm_loadu_si128(hi_bytes.as_ptr() as *const __m128i);
+    }
+
+    // For simplicity, fall back to scalar for now
+    // Full SIMD lookup table is complex
+    for byte in buffer.iter_mut() {
+        *byte = remap_table[*byte as usize];
+    }
+}
+
+/// Dispatch to SIMD or scalar based on CPU support
+pub fn buffer_clear_fast(buffer: &mut [u8], value: u8) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("sse2") {
+            unsafe { buffer_clear_simd(buffer, value); }
+            return;
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        // NEON is always available on aarch64
+        unsafe { buffer_clear_simd(buffer, value); }
+        return;
+    }
+
+    // Scalar fallback
+    buffer.fill(value);
+}
 ```
 
 ## Tasks Breakdown
 
 ### Phase 1: Inventory (1 day)
 - [ ] List all ASM files
-- [ ] Identify which have C++ equivalents
+- [ ] Identify which have Rust/C++ equivalents
 - [ ] Determine which are actually used
 
 ### Phase 2: Core Graphics (3 days)
-- [ ] Implement blit routines
+- [ ] Implement blit routines in Rust
 - [ ] Implement remap routines
 - [ ] Implement scale routines
 - [ ] Test against reference images
@@ -522,13 +1115,18 @@ void Buffer_Clear_SSE2(uint8_t* buffer, int size, uint8_t value) {
 ### Phase 5: Utilities (1 day)
 - [ ] CRC32 implementation
 - [ ] Random number generator
-- [ ] Memory operations
+- [ ] Verify compatibility with original
 
 ### Phase 6: Integration & Testing (2 days)
-- [ ] Replace ASM function declarations
-- [ ] Link C++ implementations
+- [ ] Create FFI exports for all functions
+- [ ] Generate platform.h with cbindgen
 - [ ] Verify game renders correctly
-- [ ] Performance testing
+- [ ] Performance benchmarking
+
+### Phase 7: SIMD Optimization (Optional, 2 days)
+- [ ] Profile to identify bottlenecks
+- [ ] Implement SSE2/NEON versions
+- [ ] Benchmark improvements
 
 ## Acceptance Criteria
 
@@ -537,9 +1135,10 @@ void Buffer_Clear_SSE2(uint8_t* buffer, int size, uint8_t value) {
 - [ ] Shapes/sprites display correctly
 - [ ] Compression/decompression works
 - [ ] Performance acceptable (>30 FPS)
+- [ ] Works on both Intel and Apple Silicon
 
 ## Estimated Duration
-**8-10 days**
+**8-10 days** (plus 2 optional for SIMD)
 
 ## Dependencies
 - Plans 01-08 completed

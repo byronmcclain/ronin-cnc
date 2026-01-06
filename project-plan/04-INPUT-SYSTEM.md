@@ -1,7 +1,7 @@
-# Plan 04: Input System
+# Plan 04: Input System (Rust + sdl2-rs)
 
 ## Objective
-Replace Windows input handling (keyboard, mouse) with SDL2 event-based input, maintaining compatibility with the existing game input code.
+Replace Windows input handling (keyboard, mouse) with Rust's sdl2 crate event-based input, maintaining compatibility with the existing game input code via FFI.
 
 ## Current State Analysis
 
@@ -17,499 +17,527 @@ Replace Windows input handling (keyboard, mouse) with SDL2 event-based input, ma
 **Key Classes:**
 ```cpp
 class WWKeyboardClass {
-    // Ring buffer for key events
-    unsigned short Buffer[256];
+    unsigned short Buffer[256];  // Ring buffer for key events
     int Head, Tail;
-
-    // Modifier state
-    int DownModifiers;  // Shift, Ctrl, Alt state
-
-    // Methods
-    bool Put_Key_Message(UINT vk_key, BOOL release, BOOL dbl);
-    int Check();
-    int Get();
-    bool Is_Key_Down(int key);
+    int DownModifiers;           // Shift, Ctrl, Alt state
 };
 ```
 
-**Windows APIs Used:**
-- `WM_KEYDOWN`, `WM_KEYUP`, `WM_SYSKEYDOWN`, `WM_SYSKEYUP`
-- `WM_MOUSEMOVE`, `WM_LBUTTONDOWN`, `WM_LBUTTONUP`, `WM_RBUTTONDOWN`, `WM_RBUTTONUP`
-- `GetKeyState()`, `GetAsyncKeyState()`
-- Virtual key codes (`VK_*`)
-
-**Key Features:**
-- 256-entry ring buffer for keyboard events
-- Mouse position packed with button state
-- Modifier keys tracked separately (Shift, Ctrl, Alt)
-- Caps Lock and Num Lock state
-- Double-click detection
-
-## SDL2 Implementation
+## Rust Implementation
 
 ### 4.1 Input State Structure
 
-File: `src/platform/input_sdl.cpp`
-```cpp
-#include "platform/platform_input.h"
-#include <SDL.h>
-#include <cstring>
-#include <queue>
+File: `platform/src/input/mod.rs`
+```rust
+//! Input subsystem using sdl2 events
 
-namespace {
+pub mod keyboard;
+pub mod mouse;
 
-//=============================================================================
-// Keyboard State
-//=============================================================================
+use sdl2::event::Event;
+use sdl2::keyboard::Keycode;
+use std::collections::VecDeque;
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
 
-struct KeyEvent {
-    KeyCode key;
-    bool released;
-};
+/// Key codes (matching Windows VK_* values for compatibility)
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum KeyCode {
+    None = 0,
+    Backspace = 0x08,
+    Tab = 0x09,
+    Return = 0x0D,
+    Shift = 0x10,
+    Control = 0x11,
+    Alt = 0x12,
+    Pause = 0x13,
+    CapsLock = 0x14,
+    Escape = 0x1B,
+    Space = 0x20,
+    PageUp = 0x21,
+    PageDown = 0x22,
+    End = 0x23,
+    Home = 0x24,
+    Left = 0x25,
+    Up = 0x26,
+    Right = 0x27,
+    Down = 0x28,
+    Insert = 0x2D,
+    Delete = 0x2E,
+    // 0-9 = 0x30-0x39
+    // A-Z = 0x41-0x5A
+    F1 = 0x70,
+    F2 = 0x71,
+    F3 = 0x72,
+    F4 = 0x73,
+    F5 = 0x74,
+    F6 = 0x75,
+    F7 = 0x76,
+    F8 = 0x77,
+    F9 = 0x78,
+    F10 = 0x79,
+    F11 = 0x7A,
+    F12 = 0x7B,
+    NumLock = 0x90,
+    ScrollLock = 0x91,
+}
 
-// Current frame state
-bool g_keys_current[KEY_COUNT] = {false};
-bool g_keys_previous[KEY_COUNT] = {false};
+/// Mouse button
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub enum MouseButton {
+    Left = 0,
+    Right = 1,
+    Middle = 2,
+}
 
-// Event queue (ring buffer style)
-std::queue<KeyEvent> g_key_queue;
+/// Key event for queue
+#[derive(Clone, Copy)]
+pub struct KeyEvent {
+    pub key: KeyCode,
+    pub released: bool,
+}
 
-// Modifier state
-bool g_shift_down = false;
-bool g_ctrl_down = false;
-bool g_alt_down = false;
-bool g_caps_lock = false;
-bool g_num_lock = false;
+/// Global input state
+static INPUT: Lazy<Mutex<InputState>> = Lazy::new(|| Mutex::new(InputState::new()));
 
-//=============================================================================
-// Mouse State
-//=============================================================================
+pub struct InputState {
+    // Keyboard
+    pub keys_current: [bool; 256],
+    pub keys_previous: [bool; 256],
+    pub key_queue: VecDeque<KeyEvent>,
 
-int g_mouse_x = 0;
-int g_mouse_y = 0;
-int g_mouse_wheel_delta = 0;
+    // Mouse
+    pub mouse_x: i32,
+    pub mouse_y: i32,
+    pub mouse_buttons: [bool; 3],
+    pub mouse_buttons_prev: [bool; 3],
+    pub mouse_clicked: [bool; 3],
+    pub mouse_double_clicked: [bool; 3],
+    pub mouse_wheel: i32,
+    pub last_click_time: [u32; 3],
+    pub last_click_x: [i32; 3],
+    pub last_click_y: [i32; 3],
 
-bool g_mouse_buttons_current[3] = {false};
-bool g_mouse_buttons_previous[3] = {false};
-bool g_mouse_clicked[3] = {false};
-bool g_mouse_double_clicked[3] = {false};
+    // Modifiers
+    pub shift_down: bool,
+    pub ctrl_down: bool,
+    pub alt_down: bool,
+    pub caps_lock: bool,
+    pub num_lock: bool,
 
-Uint32 g_last_click_time[3] = {0};
-int g_last_click_x[3] = {0};
-int g_last_click_y[3] = {0};
+    // Quit flag
+    pub should_quit: bool,
+}
 
-const Uint32 DOUBLE_CLICK_TIME = 500;  // ms
-const int DOUBLE_CLICK_DISTANCE = 4;    // pixels
+const DOUBLE_CLICK_TIME: u32 = 500;  // ms
+const DOUBLE_CLICK_DISTANCE: i32 = 4; // pixels
 
-//=============================================================================
-// Key Code Mapping
-//=============================================================================
-
-KeyCode SDLKeyToKeyCode(SDL_Keycode sdl_key) {
-    switch (sdl_key) {
-        case SDLK_ESCAPE: return KEY_ESCAPE;
-        case SDLK_RETURN: return KEY_RETURN;
-        case SDLK_SPACE: return KEY_SPACE;
-        case SDLK_UP: return KEY_UP;
-        case SDLK_DOWN: return KEY_DOWN;
-        case SDLK_LEFT: return KEY_LEFT;
-        case SDLK_RIGHT: return KEY_RIGHT;
-        case SDLK_LSHIFT:
-        case SDLK_RSHIFT: return KEY_SHIFT;
-        case SDLK_LCTRL:
-        case SDLK_RCTRL: return KEY_CONTROL;
-        case SDLK_LALT:
-        case SDLK_RALT: return KEY_ALT;
-        case SDLK_TAB: return (KeyCode)0x09;
-        case SDLK_BACKSPACE: return (KeyCode)0x08;
-        case SDLK_DELETE: return (KeyCode)0x2E;
-        case SDLK_INSERT: return (KeyCode)0x2D;
-        case SDLK_HOME: return (KeyCode)0x24;
-        case SDLK_END: return (KeyCode)0x23;
-        case SDLK_PAGEUP: return (KeyCode)0x21;
-        case SDLK_PAGEDOWN: return (KeyCode)0x22;
-        // Function keys
-        case SDLK_F1: return (KeyCode)0x70;
-        case SDLK_F2: return (KeyCode)0x71;
-        case SDLK_F3: return (KeyCode)0x72;
-        case SDLK_F4: return (KeyCode)0x73;
-        case SDLK_F5: return (KeyCode)0x74;
-        case SDLK_F6: return (KeyCode)0x75;
-        case SDLK_F7: return (KeyCode)0x76;
-        case SDLK_F8: return (KeyCode)0x77;
-        case SDLK_F9: return (KeyCode)0x78;
-        case SDLK_F10: return (KeyCode)0x79;
-        case SDLK_F11: return (KeyCode)0x7A;
-        case SDLK_F12: return (KeyCode)0x7B;
-        // Alphanumeric
-        default:
-            if (sdl_key >= SDLK_a && sdl_key <= SDLK_z) {
-                return (KeyCode)(0x41 + (sdl_key - SDLK_a));  // VK_A = 0x41
-            }
-            if (sdl_key >= SDLK_0 && sdl_key <= SDLK_9) {
-                return (KeyCode)(0x30 + (sdl_key - SDLK_0));  // VK_0 = 0x30
-            }
-            return KEY_NONE;
+impl InputState {
+    pub fn new() -> Self {
+        Self {
+            keys_current: [false; 256],
+            keys_previous: [false; 256],
+            key_queue: VecDeque::with_capacity(256),
+            mouse_x: 0,
+            mouse_y: 0,
+            mouse_buttons: [false; 3],
+            mouse_buttons_prev: [false; 3],
+            mouse_clicked: [false; 3],
+            mouse_double_clicked: [false; 3],
+            mouse_wheel: 0,
+            last_click_time: [0; 3],
+            last_click_x: [0; 3],
+            last_click_y: [0; 3],
+            shift_down: false,
+            ctrl_down: false,
+            alt_down: false,
+            caps_lock: false,
+            num_lock: false,
+            should_quit: false,
+        }
     }
-}
 
-MouseButton SDLButtonToMouseButton(Uint8 sdl_button) {
-    switch (sdl_button) {
-        case SDL_BUTTON_LEFT: return MOUSE_LEFT;
-        case SDL_BUTTON_RIGHT: return MOUSE_RIGHT;
-        case SDL_BUTTON_MIDDLE: return MOUSE_MIDDLE;
-        default: return MOUSE_LEFT;
+    /// Called at start of each frame
+    pub fn begin_frame(&mut self) {
+        self.keys_previous = self.keys_current;
+        self.mouse_buttons_prev = self.mouse_buttons;
+        self.mouse_clicked = [false; 3];
+        self.mouse_double_clicked = [false; 3];
+        self.mouse_wheel = 0;
     }
-}
 
-} // anonymous namespace
-```
-
-### 4.2 Initialization
-
-```cpp
-bool Platform_Input_Init(void) {
-    // Clear state
-    memset(g_keys_current, 0, sizeof(g_keys_current));
-    memset(g_keys_previous, 0, sizeof(g_keys_previous));
-    memset(g_mouse_buttons_current, 0, sizeof(g_mouse_buttons_current));
-    memset(g_mouse_buttons_previous, 0, sizeof(g_mouse_buttons_previous));
-
-    // Get initial modifier state
-    SDL_Keymod mod = SDL_GetModState();
-    g_caps_lock = (mod & KMOD_CAPS) != 0;
-    g_num_lock = (mod & KMOD_NUM) != 0;
-
-    return true;
-}
-
-void Platform_Input_Shutdown(void) {
-    // Clear key queue
-    while (!g_key_queue.empty()) {
-        g_key_queue.pop();
-    }
-}
-```
-
-### 4.3 Frame Update (Called from Event Loop)
-
-```cpp
-void Platform_Input_Update(void) {
-    // Save previous frame state
-    memcpy(g_keys_previous, g_keys_current, sizeof(g_keys_current));
-    memcpy(g_mouse_buttons_previous, g_mouse_buttons_current, sizeof(g_mouse_buttons_current));
-
-    // Reset per-frame state
-    g_mouse_wheel_delta = 0;
-    memset(g_mouse_clicked, 0, sizeof(g_mouse_clicked));
-    memset(g_mouse_double_clicked, 0, sizeof(g_mouse_double_clicked));
-}
-
-// Called for each SDL event
-void Platform_Input_HandleEvent(const SDL_Event* event) {
-    switch (event->type) {
-        case SDL_KEYDOWN: {
-            KeyCode key = SDLKeyToKeyCode(event->key.keysym.sym);
-            if (key != KEY_NONE && !event->key.repeat) {
-                g_keys_current[key] = true;
-                g_key_queue.push({key, false});
-
-                // Track modifiers
-                if (key == KEY_SHIFT) g_shift_down = true;
-                if (key == KEY_CONTROL) g_ctrl_down = true;
-                if (key == KEY_ALT) g_alt_down = true;
+    /// Handle SDL event
+    pub fn handle_event(&mut self, event: &Event, ticks: u32) {
+        match event {
+            Event::Quit { .. } => {
+                self.should_quit = true;
             }
 
-            // Update caps/num lock
-            SDL_Keymod mod = SDL_GetModState();
-            g_caps_lock = (mod & KMOD_CAPS) != 0;
-            g_num_lock = (mod & KMOD_NUM) != 0;
-            break;
-        }
+            Event::KeyDown { keycode: Some(key), repeat, .. } => {
+                if !repeat {
+                    if let Some(code) = sdl_to_keycode(*key) {
+                        let idx = code as usize;
+                        if idx < 256 {
+                            self.keys_current[idx] = true;
+                            self.key_queue.push_back(KeyEvent { key: code, released: false });
+                        }
 
-        case SDL_KEYUP: {
-            KeyCode key = SDLKeyToKeyCode(event->key.keysym.sym);
-            if (key != KEY_NONE) {
-                g_keys_current[key] = false;
-                g_key_queue.push({key, true});
-
-                // Track modifiers
-                if (key == KEY_SHIFT) g_shift_down = false;
-                if (key == KEY_CONTROL) g_ctrl_down = false;
-                if (key == KEY_ALT) g_alt_down = false;
-            }
-            break;
-        }
-
-        case SDL_MOUSEMOTION:
-            g_mouse_x = event->motion.x;
-            g_mouse_y = event->motion.y;
-            break;
-
-        case SDL_MOUSEBUTTONDOWN: {
-            MouseButton btn = SDLButtonToMouseButton(event->button.button);
-            g_mouse_buttons_current[btn] = true;
-            g_mouse_clicked[btn] = true;
-
-            // Double-click detection
-            Uint32 now = SDL_GetTicks();
-            int dx = abs(event->button.x - g_last_click_x[btn]);
-            int dy = abs(event->button.y - g_last_click_y[btn]);
-
-            if (now - g_last_click_time[btn] < DOUBLE_CLICK_TIME &&
-                dx < DOUBLE_CLICK_DISTANCE && dy < DOUBLE_CLICK_DISTANCE) {
-                g_mouse_double_clicked[btn] = true;
+                        // Track modifiers
+                        match code {
+                            KeyCode::Shift => self.shift_down = true,
+                            KeyCode::Control => self.ctrl_down = true,
+                            KeyCode::Alt => self.alt_down = true,
+                            _ => {}
+                        }
+                    }
+                }
             }
 
-            g_last_click_time[btn] = now;
-            g_last_click_x[btn] = event->button.x;
-            g_last_click_y[btn] = event->button.y;
-            break;
-        }
+            Event::KeyUp { keycode: Some(key), .. } => {
+                if let Some(code) = sdl_to_keycode(*key) {
+                    let idx = code as usize;
+                    if idx < 256 {
+                        self.keys_current[idx] = false;
+                        self.key_queue.push_back(KeyEvent { key: code, released: true });
+                    }
 
-        case SDL_MOUSEBUTTONUP: {
-            MouseButton btn = SDLButtonToMouseButton(event->button.button);
-            g_mouse_buttons_current[btn] = false;
-            break;
-        }
+                    // Track modifiers
+                    match code {
+                        KeyCode::Shift => self.shift_down = false,
+                        KeyCode::Control => self.ctrl_down = false,
+                        KeyCode::Alt => self.alt_down = false,
+                        _ => {}
+                    }
+                }
+            }
 
-        case SDL_MOUSEWHEEL:
-            g_mouse_wheel_delta = event->wheel.y;
-            break;
-    }
-}
-```
+            Event::MouseMotion { x, y, .. } => {
+                self.mouse_x = *x;
+                self.mouse_y = *y;
+            }
 
-### 4.4 Keyboard Query Functions
+            Event::MouseButtonDown { mouse_btn, x, y, .. } => {
+                let btn = sdl_to_mousebutton(*mouse_btn) as usize;
+                self.mouse_buttons[btn] = true;
+                self.mouse_clicked[btn] = true;
 
-```cpp
-bool Platform_Key_IsPressed(KeyCode key) {
-    if (key < 0 || key >= KEY_COUNT) return false;
-    return g_keys_current[key];
-}
+                // Double-click detection
+                let dx = (x - self.last_click_x[btn]).abs();
+                let dy = (y - self.last_click_y[btn]).abs();
+                let dt = ticks.saturating_sub(self.last_click_time[btn]);
 
-bool Platform_Key_WasPressed(KeyCode key) {
-    if (key < 0 || key >= KEY_COUNT) return false;
-    return g_keys_current[key] && !g_keys_previous[key];
-}
+                if dt < DOUBLE_CLICK_TIME && dx < DOUBLE_CLICK_DISTANCE && dy < DOUBLE_CLICK_DISTANCE {
+                    self.mouse_double_clicked[btn] = true;
+                }
 
-bool Platform_Key_WasReleased(KeyCode key) {
-    if (key < 0 || key >= KEY_COUNT) return false;
-    return !g_keys_current[key] && g_keys_previous[key];
-}
+                self.last_click_time[btn] = ticks;
+                self.last_click_x[btn] = *x;
+                self.last_click_y[btn] = *y;
+            }
 
-bool Platform_Key_GetNext(KeyCode* key, bool* released) {
-    if (g_key_queue.empty()) return false;
+            Event::MouseButtonUp { mouse_btn, .. } => {
+                let btn = sdl_to_mousebutton(*mouse_btn) as usize;
+                self.mouse_buttons[btn] = false;
+            }
 
-    KeyEvent event = g_key_queue.front();
-    g_key_queue.pop();
+            Event::MouseWheel { y, .. } => {
+                self.mouse_wheel = *y;
+            }
 
-    *key = event.key;
-    *released = event.released;
-    return true;
-}
-
-void Platform_Key_Clear(void) {
-    while (!g_key_queue.empty()) {
-        g_key_queue.pop();
-    }
-}
-
-bool Platform_Key_ShiftDown(void) { return g_shift_down; }
-bool Platform_Key_CtrlDown(void) { return g_ctrl_down; }
-bool Platform_Key_AltDown(void) { return g_alt_down; }
-bool Platform_Key_CapsLock(void) { return g_caps_lock; }
-bool Platform_Key_NumLock(void) { return g_num_lock; }
-```
-
-### 4.5 Mouse Query Functions
-
-```cpp
-void Platform_Mouse_GetPosition(int* x, int* y) {
-    if (x) *x = g_mouse_x;
-    if (y) *y = g_mouse_y;
-}
-
-void Platform_Mouse_SetPosition(int x, int y) {
-    // Get window from graphics system
-    extern SDL_Window* g_window;  // From graphics_sdl.cpp
-    SDL_WarpMouseInWindow(g_window, x, y);
-    g_mouse_x = x;
-    g_mouse_y = y;
-}
-
-bool Platform_Mouse_IsPressed(MouseButton button) {
-    return g_mouse_buttons_current[button];
-}
-
-bool Platform_Mouse_WasClicked(MouseButton button) {
-    return g_mouse_clicked[button];
-}
-
-bool Platform_Mouse_WasDoubleClicked(MouseButton button) {
-    return g_mouse_double_clicked[button];
-}
-
-int Platform_Mouse_GetWheelDelta(void) {
-    return g_mouse_wheel_delta;
-}
-
-void Platform_Mouse_Show(void) {
-    SDL_ShowCursor(SDL_ENABLE);
-}
-
-void Platform_Mouse_Hide(void) {
-    SDL_ShowCursor(SDL_DISABLE);
-}
-
-void Platform_Mouse_Confine(bool confine) {
-    extern SDL_Window* g_window;
-    SDL_SetWindowGrab(g_window, confine ? SDL_TRUE : SDL_FALSE);
-}
-```
-
-### 4.6 WWKeyboardClass Compatibility Wrapper
-
-File: `include/compat/keyboard_wrapper.h`
-```cpp
-#ifndef KEYBOARD_WRAPPER_H
-#define KEYBOARD_WRAPPER_H
-
-#include "platform/platform_input.h"
-
-// Virtual key code mapping (Windows VK_* to our KeyCode)
-#define VK_ESCAPE   KEY_ESCAPE
-#define VK_RETURN   KEY_RETURN
-#define VK_SPACE    KEY_SPACE
-#define VK_LEFT     KEY_LEFT
-#define VK_UP       KEY_UP
-#define VK_RIGHT    KEY_RIGHT
-#define VK_DOWN     KEY_DOWN
-#define VK_SHIFT    KEY_SHIFT
-#define VK_CONTROL  KEY_CONTROL
-#define VK_MENU     KEY_ALT
-// ... add more as needed
-
-class WWKeyboardClass {
-public:
-    WWKeyboardClass() {}
-
-    // Check if key event available
-    int Check() {
-        KeyCode key;
-        bool released;
-        // Peek without removing
-        // (Would need to modify Platform API or use internal access)
-        return !g_key_queue.empty();
-    }
-
-    // Get next key event
-    int Get() {
-        KeyCode key;
-        bool released;
-        if (Platform_Key_GetNext(&key, &released)) {
-            // Pack into original format: key | (released << 8)
-            return key | (released ? 0x100 : 0);
-        }
-        return 0;
-    }
-
-    bool Is_Key_Down(int vk_key) {
-        return Platform_Key_IsPressed((KeyCode)vk_key);
-    }
-
-    void Clear() {
-        Platform_Key_Clear();
-    }
-
-    // Modifier queries
-    bool Is_Shift_Down() { return Platform_Key_ShiftDown(); }
-    bool Is_Ctrl_Down() { return Platform_Key_CtrlDown(); }
-    bool Is_Alt_Down() { return Platform_Key_AltDown(); }
-};
-
-// Global keyboard instance
-extern WWKeyboardClass* Keyboard;
-
-#endif // KEYBOARD_WRAPPER_H
-```
-
-### 4.7 Mouse Compatibility
-
-File: `include/compat/mouse_wrapper.h`
-```cpp
-#ifndef MOUSE_WRAPPER_H
-#define MOUSE_WRAPPER_H
-
-#include "platform/platform_input.h"
-
-// Mouse button constants matching original code
-#define LEFT_BUTTON     MOUSE_LEFT
-#define RIGHT_BUTTON    MOUSE_RIGHT
-
-inline void Get_Mouse_XY(int* x, int* y) {
-    Platform_Mouse_GetPosition(x, y);
-}
-
-inline void Set_Mouse_XY(int x, int y) {
-    Platform_Mouse_SetPosition(x, y);
-}
-
-inline bool Mouse_Left_Pressed() {
-    return Platform_Mouse_IsPressed(MOUSE_LEFT);
-}
-
-inline bool Mouse_Right_Pressed() {
-    return Platform_Mouse_IsPressed(MOUSE_RIGHT);
-}
-
-inline void Hide_Mouse() {
-    Platform_Mouse_Hide();
-}
-
-inline void Show_Mouse() {
-    Platform_Mouse_Show();
-}
-
-#endif // MOUSE_WRAPPER_H
-```
-
-## Integration with Game Loop
-
-The input system needs to be called from the main event loop:
-
-```cpp
-// In main.cpp or platform initialization
-void Platform_PumpEvents(void) {
-    Platform_Input_Update();  // Prepare for new frame
-
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-        switch (event.type) {
-            case SDL_QUIT:
-                g_should_quit = true;
-                break;
-
-            case SDL_KEYDOWN:
-            case SDL_KEYUP:
-            case SDL_MOUSEMOTION:
-            case SDL_MOUSEBUTTONDOWN:
-            case SDL_MOUSEBUTTONUP:
-            case SDL_MOUSEWHEEL:
-                Platform_Input_HandleEvent(&event);
-                break;
+            _ => {}
         }
     }
+}
+
+/// Convert SDL keycode to our KeyCode
+fn sdl_to_keycode(key: Keycode) -> Option<KeyCode> {
+    match key {
+        Keycode::Backspace => Some(KeyCode::Backspace),
+        Keycode::Tab => Some(KeyCode::Tab),
+        Keycode::Return => Some(KeyCode::Return),
+        Keycode::Escape => Some(KeyCode::Escape),
+        Keycode::Space => Some(KeyCode::Space),
+        Keycode::Up => Some(KeyCode::Up),
+        Keycode::Down => Some(KeyCode::Down),
+        Keycode::Left => Some(KeyCode::Left),
+        Keycode::Right => Some(KeyCode::Right),
+        Keycode::LShift | Keycode::RShift => Some(KeyCode::Shift),
+        Keycode::LCtrl | Keycode::RCtrl => Some(KeyCode::Control),
+        Keycode::LAlt | Keycode::RAlt => Some(KeyCode::Alt),
+        Keycode::PageUp => Some(KeyCode::PageUp),
+        Keycode::PageDown => Some(KeyCode::PageDown),
+        Keycode::Home => Some(KeyCode::Home),
+        Keycode::End => Some(KeyCode::End),
+        Keycode::Insert => Some(KeyCode::Insert),
+        Keycode::Delete => Some(KeyCode::Delete),
+        Keycode::F1 => Some(KeyCode::F1),
+        Keycode::F2 => Some(KeyCode::F2),
+        Keycode::F3 => Some(KeyCode::F3),
+        Keycode::F4 => Some(KeyCode::F4),
+        Keycode::F5 => Some(KeyCode::F5),
+        Keycode::F6 => Some(KeyCode::F6),
+        Keycode::F7 => Some(KeyCode::F7),
+        Keycode::F8 => Some(KeyCode::F8),
+        Keycode::F9 => Some(KeyCode::F9),
+        Keycode::F10 => Some(KeyCode::F10),
+        Keycode::F11 => Some(KeyCode::F11),
+        Keycode::F12 => Some(KeyCode::F12),
+        _ => {
+            // Handle alphanumeric keys
+            let code = key as i32;
+            if code >= 'a' as i32 && code <= 'z' as i32 {
+                // Convert to uppercase VK code (0x41-0x5A)
+                return Some(unsafe { std::mem::transmute((code - 'a' as i32 + 0x41) as u8) });
+            }
+            if code >= '0' as i32 && code <= '9' as i32 {
+                // VK_0 to VK_9 (0x30-0x39)
+                return Some(unsafe { std::mem::transmute((code - '0' as i32 + 0x30) as u8) });
+            }
+            None
+        }
+    }
+}
+
+/// Convert SDL mouse button to our MouseButton
+fn sdl_to_mousebutton(btn: sdl2::mouse::MouseButton) -> MouseButton {
+    match btn {
+        sdl2::mouse::MouseButton::Left => MouseButton::Left,
+        sdl2::mouse::MouseButton::Right => MouseButton::Right,
+        sdl2::mouse::MouseButton::Middle => MouseButton::Middle,
+        _ => MouseButton::Left,
+    }
+}
+
+/// Access input state
+pub fn with_input<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut InputState) -> R,
+{
+    INPUT.lock().ok().map(|mut guard| f(&mut guard))
+}
+
+/// Check if quit requested
+pub fn should_quit() -> bool {
+    INPUT.lock().map(|s| s.should_quit).unwrap_or(false)
+}
+
+/// Pump events (called from main event loop)
+pub fn pump_events() {
+    // This is a no-op - actual pumping happens in graphics module
+}
+```
+
+### 4.2 FFI Input Exports
+
+File: `platform/src/ffi/input.rs`
+```rust
+//! Input FFI exports
+
+use crate::input::{self, KeyCode, MouseButton};
+
+// =============================================================================
+// Keyboard
+// =============================================================================
+
+/// Initialize input subsystem
+#[no_mangle]
+pub extern "C" fn Platform_Input_Init() -> i32 {
+    // Input is initialized as part of platform init
+    0
+}
+
+/// Shutdown input subsystem
+#[no_mangle]
+pub extern "C" fn Platform_Input_Shutdown() {
+    // Nothing to do
+}
+
+/// Update input state (called each frame)
+#[no_mangle]
+pub extern "C" fn Platform_Input_Update() {
+    input::with_input(|state| {
+        state.begin_frame();
+    });
+}
+
+/// Check if key is currently pressed
+#[no_mangle]
+pub extern "C" fn Platform_Key_IsPressed(key: KeyCode) -> bool {
+    input::with_input(|state| {
+        let idx = key as usize;
+        if idx < 256 { state.keys_current[idx] } else { false }
+    }).unwrap_or(false)
+}
+
+/// Check if key was just pressed this frame
+#[no_mangle]
+pub extern "C" fn Platform_Key_WasPressed(key: KeyCode) -> bool {
+    input::with_input(|state| {
+        let idx = key as usize;
+        if idx < 256 {
+            state.keys_current[idx] && !state.keys_previous[idx]
+        } else {
+            false
+        }
+    }).unwrap_or(false)
+}
+
+/// Check if key was just released this frame
+#[no_mangle]
+pub extern "C" fn Platform_Key_WasReleased(key: KeyCode) -> bool {
+    input::with_input(|state| {
+        let idx = key as usize;
+        if idx < 256 {
+            !state.keys_current[idx] && state.keys_previous[idx]
+        } else {
+            false
+        }
+    }).unwrap_or(false)
+}
+
+/// Get next key event from queue
+#[no_mangle]
+pub extern "C" fn Platform_Key_GetNext(key: *mut KeyCode, released: *mut bool) -> bool {
+    if key.is_null() || released.is_null() {
+        return false;
+    }
+
+    input::with_input(|state| {
+        if let Some(event) = state.key_queue.pop_front() {
+            unsafe {
+                *key = event.key;
+                *released = event.released;
+            }
+            true
+        } else {
+            false
+        }
+    }).unwrap_or(false)
+}
+
+/// Clear key queue
+#[no_mangle]
+pub extern "C" fn Platform_Key_Clear() {
+    input::with_input(|state| {
+        state.key_queue.clear();
+    });
+}
+
+/// Check if Shift is held
+#[no_mangle]
+pub extern "C" fn Platform_Key_ShiftDown() -> bool {
+    input::with_input(|state| state.shift_down).unwrap_or(false)
+}
+
+/// Check if Ctrl is held
+#[no_mangle]
+pub extern "C" fn Platform_Key_CtrlDown() -> bool {
+    input::with_input(|state| state.ctrl_down).unwrap_or(false)
+}
+
+/// Check if Alt is held
+#[no_mangle]
+pub extern "C" fn Platform_Key_AltDown() -> bool {
+    input::with_input(|state| state.alt_down).unwrap_or(false)
+}
+
+/// Check Caps Lock state
+#[no_mangle]
+pub extern "C" fn Platform_Key_CapsLock() -> bool {
+    input::with_input(|state| state.caps_lock).unwrap_or(false)
+}
+
+/// Check Num Lock state
+#[no_mangle]
+pub extern "C" fn Platform_Key_NumLock() -> bool {
+    input::with_input(|state| state.num_lock).unwrap_or(false)
+}
+
+// =============================================================================
+// Mouse
+// =============================================================================
+
+/// Get mouse position
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_GetPosition(x: *mut i32, y: *mut i32) {
+    input::with_input(|state| {
+        if !x.is_null() {
+            unsafe { *x = state.mouse_x; }
+        }
+        if !y.is_null() {
+            unsafe { *y = state.mouse_y; }
+        }
+    });
+}
+
+/// Set mouse position
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_SetPosition(x: i32, y: i32) {
+    // Would need access to SDL window to warp mouse
+    input::with_input(|state| {
+        state.mouse_x = x;
+        state.mouse_y = y;
+    });
+}
+
+/// Check if mouse button is pressed
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_IsPressed(button: MouseButton) -> bool {
+    input::with_input(|state| {
+        state.mouse_buttons[button as usize]
+    }).unwrap_or(false)
+}
+
+/// Check if mouse button was clicked this frame
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_WasClicked(button: MouseButton) -> bool {
+    input::with_input(|state| {
+        state.mouse_clicked[button as usize]
+    }).unwrap_or(false)
+}
+
+/// Check if mouse button was double-clicked this frame
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_WasDoubleClicked(button: MouseButton) -> bool {
+    input::with_input(|state| {
+        state.mouse_double_clicked[button as usize]
+    }).unwrap_or(false)
+}
+
+/// Get mouse wheel delta
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_GetWheelDelta() -> i32 {
+    input::with_input(|state| state.mouse_wheel).unwrap_or(0)
+}
+
+/// Show mouse cursor
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_Show() {
+    sdl2::mouse::show_cursor(true);
+}
+
+/// Hide mouse cursor
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_Hide() {
+    sdl2::mouse::show_cursor(false);
+}
+
+/// Confine mouse to window
+#[no_mangle]
+pub extern "C" fn Platform_Mouse_Confine(_confine: bool) {
+    // Would need access to SDL window
 }
 ```
 
 ## Tasks Breakdown
 
 ### Phase 1: Basic Keyboard (2 days)
-- [ ] Implement key code mapping table
+- [ ] Implement complete key code mapping
 - [ ] Implement key state tracking
 - [ ] Implement key event queue
-- [ ] Test with simple key display
+- [ ] Test with key echo
 
 ### Phase 2: Mouse Input (1 day)
 - [ ] Implement mouse position tracking
@@ -517,47 +545,31 @@ void Platform_PumpEvents(void) {
 - [ ] Implement double-click detection
 - [ ] Test with cursor display
 
-### Phase 3: Compatibility Layer (1 day)
-- [ ] Create `WWKeyboardClass` wrapper
-- [ ] Create mouse function wrappers
-- [ ] Map VK_* constants
-- [ ] Test with existing game code
+### Phase 3: FFI Exports (1 day)
+- [ ] Create all FFI wrapper functions
+- [ ] Verify cbindgen output
+- [ ] Test calling from C++
 
 ### Phase 4: Integration (1 day)
 - [ ] Hook into main event loop
 - [ ] Test modifier keys
-- [ ] Test mouse confinement
-- [ ] Verify game menu navigation works
-
-## Testing Strategy
-
-### Test 1: Key Echo
-Print each key press/release to console.
-
-### Test 2: Mouse Tracking
-Display mouse coordinates and button state.
-
-### Test 3: Menu Navigation
-Navigate game menus using keyboard and mouse.
-
-### Test 4: Game Control
-Test unit selection and movement commands.
+- [ ] Verify game menu navigation
 
 ## Acceptance Criteria
 
 - [ ] All keyboard keys mapped correctly
-- [ ] Mouse position accurate to game coordinates
+- [ ] Mouse position accurate
 - [ ] Double-click detection works
 - [ ] Modifier keys (Shift/Ctrl/Alt) work
-- [ ] Game menus navigable with keyboard
-- [ ] Unit selection works with mouse
+- [ ] Game menus navigable
+- [ ] No panics cross FFI boundary
 
 ## Estimated Duration
 **4-5 days**
 
 ## Dependencies
-- Plan 03 (Graphics) completed (for window handle)
-- SDL2 event system working
+- Plan 03 (Graphics) for SDL event pump
+- sdl2 crate
 
 ## Next Plan
 Once input is working, proceed to **Plan 05: Timing System**

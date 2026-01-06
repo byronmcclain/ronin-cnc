@@ -1,7 +1,7 @@
-# Plan 05: Timing System
+# Plan 05: Timing System (Rust std::time)
 
 ## Objective
-Replace Windows timing APIs (multimedia timers, QueryPerformanceCounter) with SDL2/POSIX timing, ensuring the game runs at the correct speed.
+Replace Windows timing APIs (multimedia timers, QueryPerformanceCounter) with Rust's std::time, ensuring the game runs at the correct speed.
 
 ## Current State Analysis
 
@@ -11,564 +11,489 @@ Replace Windows timing APIs (multimedia timers, QueryPerformanceCounter) with SD
 - `WIN32LIB/TIMER/TIMER.CPP`
 - `WIN32LIB/TIMER/TIMER.H`
 - `CODE/STARTUP.CPP` (lines 351-361)
-- `WIN32LIB/AUDIO/SOUNDIO.CPP` (audio timer callbacks)
 
 **Windows APIs Used:**
 ```cpp
-// High-resolution timing
 QueryPerformanceCounter(&counter);
 QueryPerformanceFrequency(&frequency);
-
-// Multimedia timers
 timeSetEvent(interval, resolution, callback, data, TIME_PERIODIC);
 timeKillEvent(timerID);
-
-// Basic timing
 GetTickCount();
-timeGetTime();
 Sleep(milliseconds);
 ```
 
-**Timer Usage:**
-- **Game Timer**: 60 Hz (16.67ms) for game logic
-- **Audio Timer**: 40 Hz (25ms) for sound maintenance
-- **Frame Timer**: Variable, for FPS measurement
-
-**Key Classes:**
-```cpp
-class TimerClass {
-    int Started;        // When timer was started
-    int Accumulated;    // Total elapsed time
-
-    void Start();
-    void Stop();
-    int Time();         // Get elapsed ticks
-};
-
-class CountDownTimerClass {
-    int InitialValue;
-    int StartTime;
-
-    void Set(int value);
-    int Time();         // Time remaining
-    bool Expired();
-};
-```
-
-## SDL2 Implementation
+## Rust Implementation
 
 ### 5.1 Core Timing Functions
 
-File: `src/platform/timer_sdl.cpp`
-```cpp
-#include "platform/platform_timer.h"
-#include <SDL.h>
-#include <vector>
-#include <mutex>
-#include <thread>
-#include <atomic>
+File: `platform/src/timer/mod.rs`
+```rust
+//! Timer subsystem using std::time
 
-namespace {
+use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use once_cell::sync::Lazy;
 
-// High-frequency counter baseline
-Uint64 g_perf_frequency = 0;
-Uint64 g_start_counter = 0;
+/// Global start time for relative timing
+static START_TIME: Lazy<Instant> = Lazy::new(Instant::now);
 
-// Timer callbacks
-struct PeriodicTimer {
-    SDL_TimerID sdl_id;
-    TimerCallback callback;
-    void* userdata;
-    std::atomic<bool> active;
-};
+/// Periodic timer registry
+static TIMERS: Lazy<Mutex<TimerRegistry>> = Lazy::new(|| Mutex::new(TimerRegistry::new()));
 
-std::vector<PeriodicTimer*> g_timers;
-std::mutex g_timer_mutex;
-int g_next_timer_handle = 1;
-
-} // anonymous namespace
-
-//=============================================================================
+// =============================================================================
 // Basic Time Functions
-//=============================================================================
+// =============================================================================
 
-static bool g_timer_initialized = false;
-
-void Platform_Timer_Init(void) {
-    if (g_timer_initialized) return;
-
-    g_perf_frequency = SDL_GetPerformanceFrequency();
-    g_start_counter = SDL_GetPerformanceCounter();
-    g_timer_initialized = true;
+/// Get milliseconds since platform initialization
+pub fn get_ticks() -> u32 {
+    START_TIME.elapsed().as_millis() as u32
 }
 
-uint32_t Platform_GetTicks(void) {
-    return SDL_GetTicks();
+/// Get high-precision time in seconds
+pub fn get_time() -> f64 {
+    START_TIME.elapsed().as_secs_f64()
 }
 
-void Platform_Delay(uint32_t milliseconds) {
-    SDL_Delay(milliseconds);
+/// Sleep for specified milliseconds
+pub fn delay(ms: u32) {
+    thread::sleep(Duration::from_millis(ms as u64));
 }
 
-uint64_t Platform_GetPerformanceCounter(void) {
-    return SDL_GetPerformanceCounter();
+/// Get high-resolution performance counter (nanoseconds since start)
+pub fn get_performance_counter() -> u64 {
+    START_TIME.elapsed().as_nanos() as u64
 }
 
-uint64_t Platform_GetPerformanceFrequency(void) {
-    return SDL_GetPerformanceFrequency();
+/// Get performance counter frequency (1 GHz = nanosecond resolution)
+pub fn get_performance_frequency() -> u64 {
+    1_000_000_000
 }
 
-double Platform_GetTime(void) {
-    if (!g_timer_initialized) Platform_Timer_Init();
+// =============================================================================
+// Periodic Timers
+// =============================================================================
 
-    Uint64 now = SDL_GetPerformanceCounter();
-    return (double)(now - g_start_counter) / (double)g_perf_frequency;
-}
-```
+/// Timer callback type (called from timer thread)
+pub type TimerCallback = Box<dyn FnMut() + Send + 'static>;
 
-### 5.2 Periodic Timer Implementation
+/// Timer handle
+pub type TimerHandle = i32;
 
-```cpp
-//=============================================================================
-// SDL Timer Callback Wrapper
-//=============================================================================
+pub const INVALID_TIMER_HANDLE: TimerHandle = -1;
 
-static Uint32 SDL_Timer_Callback(Uint32 interval, void* param) {
-    PeriodicTimer* timer = static_cast<PeriodicTimer*>(param);
-
-    if (timer->active && timer->callback) {
-        timer->callback(timer->userdata);
-    }
-
-    return timer->active ? interval : 0;  // Return 0 to stop timer
+struct PeriodicTimer {
+    interval: Duration,
+    callback: TimerCallback,
+    active: bool,
+    thread_handle: Option<thread::JoinHandle<()>>,
 }
 
-//=============================================================================
-// Periodic Timer Functions
-//=============================================================================
-
-TimerHandle Platform_Timer_Create(uint32_t interval_ms, TimerCallback callback, void* userdata) {
-    std::lock_guard<std::mutex> lock(g_timer_mutex);
-
-    PeriodicTimer* timer = new PeriodicTimer();
-    timer->callback = callback;
-    timer->userdata = userdata;
-    timer->active = true;
-
-    timer->sdl_id = SDL_AddTimer(interval_ms, SDL_Timer_Callback, timer);
-
-    if (timer->sdl_id == 0) {
-        delete timer;
-        return INVALID_TIMER_HANDLE;
-    }
-
-    g_timers.push_back(timer);
-    return g_next_timer_handle++;
+struct TimerRegistry {
+    timers: Vec<Option<Arc<Mutex<TimerState>>>>,
+    next_handle: TimerHandle,
 }
 
-void Platform_Timer_Destroy(TimerHandle handle) {
-    std::lock_guard<std::mutex> lock(g_timer_mutex);
-
-    if (handle <= 0 || handle > (int)g_timers.size()) return;
-
-    PeriodicTimer* timer = g_timers[handle - 1];
-    if (timer) {
-        timer->active = false;
-        SDL_RemoveTimer(timer->sdl_id);
-        delete timer;
-        g_timers[handle - 1] = nullptr;
-    }
+struct TimerState {
+    active: bool,
 }
 
-void Platform_Timer_SetInterval(TimerHandle handle, uint32_t interval_ms) {
-    // SDL doesn't support changing interval of existing timer
-    // Would need to destroy and recreate
-    // For now, this is a no-op (original code rarely changes intervals)
-}
-```
-
-### 5.3 Frame Rate Limiter
-
-```cpp
-//=============================================================================
-// Frame Rate Control (for game loop)
-//=============================================================================
-
-namespace {
-    Uint64 g_frame_start = 0;
-    Uint64 g_frame_target_ticks = 0;
-    double g_frame_time = 0.0;
-    double g_fps = 0.0;
-
-    // FPS averaging
-    double g_fps_samples[60] = {0};
-    int g_fps_sample_index = 0;
-}
-
-void Platform_Frame_Start(void) {
-    g_frame_start = SDL_GetPerformanceCounter();
-}
-
-void Platform_Frame_End(int target_fps) {
-    Uint64 frame_end = SDL_GetPerformanceCounter();
-    Uint64 freq = SDL_GetPerformanceFrequency();
-
-    // Calculate frame time
-    g_frame_time = (double)(frame_end - g_frame_start) / (double)freq;
-
-    // Calculate target frame time
-    double target_time = 1.0 / (double)target_fps;
-
-    // Sleep if we're running too fast
-    double sleep_time = target_time - g_frame_time;
-    if (sleep_time > 0.001) {  // > 1ms
-        SDL_Delay((Uint32)(sleep_time * 1000.0));
-    }
-
-    // Recalculate actual frame time including sleep
-    frame_end = SDL_GetPerformanceCounter();
-    g_frame_time = (double)(frame_end - g_frame_start) / (double)freq;
-
-    // Update FPS counter
-    g_fps_samples[g_fps_sample_index] = 1.0 / g_frame_time;
-    g_fps_sample_index = (g_fps_sample_index + 1) % 60;
-
-    // Calculate average FPS
-    double sum = 0.0;
-    for (int i = 0; i < 60; i++) {
-        sum += g_fps_samples[i];
-    }
-    g_fps = sum / 60.0;
-}
-
-double Platform_GetFrameTime(void) {
-    return g_frame_time;
-}
-
-double Platform_GetFPS(void) {
-    return g_fps;
-}
-```
-
-### 5.4 Windows Compatibility Wrappers
-
-File: `include/compat/timer_wrapper.h`
-```cpp
-#ifndef TIMER_WRAPPER_H
-#define TIMER_WRAPPER_H
-
-#include "platform/platform_timer.h"
-
-//=============================================================================
-// QueryPerformanceCounter replacement
-//=============================================================================
-
-typedef struct {
-    int64_t QuadPart;
-} LARGE_INTEGER;
-
-inline BOOL QueryPerformanceCounter(LARGE_INTEGER* counter) {
-    counter->QuadPart = Platform_GetPerformanceCounter();
-    return TRUE;
-}
-
-inline BOOL QueryPerformanceFrequency(LARGE_INTEGER* frequency) {
-    frequency->QuadPart = Platform_GetPerformanceFrequency();
-    return TRUE;
-}
-
-//=============================================================================
-// GetTickCount / timeGetTime replacement
-//=============================================================================
-
-inline DWORD GetTickCount(void) {
-    return Platform_GetTicks();
-}
-
-inline DWORD timeGetTime(void) {
-    return Platform_GetTicks();
-}
-
-//=============================================================================
-// Sleep replacement
-//=============================================================================
-
-inline void Sleep(DWORD milliseconds) {
-    Platform_Delay(milliseconds);
-}
-
-//=============================================================================
-// Multimedia Timer replacement
-//=============================================================================
-
-// Timer callback type
-typedef void (CALLBACK *LPTIMECALLBACK)(UINT uTimerID, UINT uMsg,
-                                         DWORD_PTR dwUser, DWORD_PTR dw1,
-                                         DWORD_PTR dw2);
-
-// Timer flags
-#define TIME_ONESHOT    0
-#define TIME_PERIODIC   1
-
-// Wrapper to convert callback format
-struct MMTimerWrapper {
-    LPTIMECALLBACK callback;
-    DWORD_PTR user_data;
-    TimerHandle platform_handle;
-};
-
-static void MMTimer_Callback_Wrapper(void* userdata) {
-    MMTimerWrapper* wrapper = static_cast<MMTimerWrapper*>(userdata);
-    if (wrapper->callback) {
-        wrapper->callback(0, 0, wrapper->user_data, 0, 0);
-    }
-}
-
-inline MMRESULT timeSetEvent(UINT uDelay, UINT uResolution,
-                              LPTIMECALLBACK fptc, DWORD_PTR dwUser,
-                              UINT fuEvent) {
-    MMTimerWrapper* wrapper = new MMTimerWrapper();
-    wrapper->callback = fptc;
-    wrapper->user_data = dwUser;
-
-    wrapper->platform_handle = Platform_Timer_Create(
-        uDelay,
-        MMTimer_Callback_Wrapper,
-        wrapper
-    );
-
-    // Return wrapper pointer as timer ID (hacky but works)
-    return (MMRESULT)(intptr_t)wrapper;
-}
-
-inline MMRESULT timeKillEvent(UINT uTimerID) {
-    MMTimerWrapper* wrapper = (MMTimerWrapper*)(intptr_t)uTimerID;
-    if (wrapper) {
-        Platform_Timer_Destroy(wrapper->platform_handle);
-        delete wrapper;
-    }
-    return 0;
-}
-
-#endif // TIMER_WRAPPER_H
-```
-
-### 5.5 Game Timer Classes
-
-File: `include/compat/gametimer_wrapper.h`
-```cpp
-#ifndef GAMETIMER_WRAPPER_H
-#define GAMETIMER_WRAPPER_H
-
-#include "platform/platform_timer.h"
-
-//=============================================================================
-// TimerClass - Measures elapsed time
-//=============================================================================
-
-class TimerClass {
-private:
-    uint32_t started_time;
-    uint32_t accumulated;
-    bool running;
-
-public:
-    TimerClass() : started_time(0), accumulated(0), running(false) {}
-
-    void Start() {
-        if (!running) {
-            started_time = Platform_GetTicks();
-            running = true;
+impl TimerRegistry {
+    fn new() -> Self {
+        Self {
+            timers: Vec::new(),
+            next_handle: 1,
         }
     }
 
-    void Stop() {
-        if (running) {
-            accumulated += Platform_GetTicks() - started_time;
-            running = false;
+    fn create(&mut self, interval_ms: u32, mut callback: TimerCallback) -> TimerHandle {
+        let handle = self.next_handle;
+        self.next_handle += 1;
+
+        let interval = Duration::from_millis(interval_ms as u64);
+        let state = Arc::new(Mutex::new(TimerState { active: true }));
+        let state_clone = state.clone();
+
+        // Spawn timer thread
+        let _thread_handle = thread::spawn(move || {
+            let mut next_tick = Instant::now() + interval;
+
+            loop {
+                // Check if still active
+                if let Ok(s) = state_clone.lock() {
+                    if !s.active {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+
+                // Wait until next tick
+                let now = Instant::now();
+                if now < next_tick {
+                    thread::sleep(next_tick - now);
+                }
+                next_tick += interval;
+
+                // Call callback
+                callback();
+            }
+        });
+
+        // Store state
+        let idx = handle as usize;
+        if idx >= self.timers.len() {
+            self.timers.resize(idx + 1, None);
+        }
+        self.timers[idx] = Some(state);
+
+        handle
+    }
+
+    fn destroy(&mut self, handle: TimerHandle) {
+        let idx = handle as usize;
+        if idx < self.timers.len() {
+            if let Some(state) = &self.timers[idx] {
+                if let Ok(mut s) = state.lock() {
+                    s.active = false;
+                }
+            }
+            self.timers[idx] = None;
         }
     }
-
-    void Reset() {
-        accumulated = 0;
-        if (running) {
-            started_time = Platform_GetTicks();
-        }
-    }
-
-    uint32_t Time() const {
-        if (running) {
-            return accumulated + (Platform_GetTicks() - started_time);
-        }
-        return accumulated;
-    }
-
-    bool Is_Running() const { return running; }
-};
-
-//=============================================================================
-// CountDownTimerClass - Counts down from a value
-//=============================================================================
-
-class CountDownTimerClass {
-private:
-    uint32_t start_time;
-    uint32_t duration;
-    bool active;
-
-public:
-    CountDownTimerClass() : start_time(0), duration(0), active(false) {}
-
-    void Set(uint32_t milliseconds) {
-        start_time = Platform_GetTicks();
-        duration = milliseconds;
-        active = true;
-    }
-
-    void Clear() {
-        active = false;
-        duration = 0;
-    }
-
-    uint32_t Time() const {
-        if (!active) return 0;
-
-        uint32_t elapsed = Platform_GetTicks() - start_time;
-        if (elapsed >= duration) return 0;
-        return duration - elapsed;
-    }
-
-    bool Expired() const {
-        if (!active) return true;
-        return (Platform_GetTicks() - start_time) >= duration;
-    }
-
-    bool Is_Active() const { return active && !Expired(); }
-};
-
-//=============================================================================
-// Game Frame Timing
-//=============================================================================
-
-// Ticks per second (game logic runs at 15 FPS in original)
-#define TICKS_PER_SECOND    15
-#define TIMER_SECOND        1000
-
-// Convert real time to game ticks
-inline int Time_To_Ticks(uint32_t milliseconds) {
-    return (milliseconds * TICKS_PER_SECOND) / TIMER_SECOND;
 }
 
-// Convert game ticks to real time
-inline uint32_t Ticks_To_Time(int ticks) {
-    return (ticks * TIMER_SECOND) / TICKS_PER_SECOND;
+/// Create a periodic timer
+pub fn create_timer(interval_ms: u32, callback: TimerCallback) -> TimerHandle {
+    if let Ok(mut registry) = TIMERS.lock() {
+        registry.create(interval_ms, callback)
+    } else {
+        INVALID_TIMER_HANDLE
+    }
 }
 
-#endif // GAMETIMER_WRAPPER_H
+/// Destroy a periodic timer
+pub fn destroy_timer(handle: TimerHandle) {
+    if let Ok(mut registry) = TIMERS.lock() {
+        registry.destroy(handle);
+    }
+}
+
+// =============================================================================
+// Frame Rate Control
+// =============================================================================
+
+/// Frame rate controller for game loop
+pub struct FrameRateController {
+    frame_start: Instant,
+    target_fps: u32,
+    frame_time: f64,
+    fps: f64,
+    fps_samples: [f64; 60],
+    fps_sample_index: usize,
+}
+
+impl FrameRateController {
+    pub fn new(target_fps: u32) -> Self {
+        Self {
+            frame_start: Instant::now(),
+            target_fps,
+            frame_time: 0.0,
+            fps: 0.0,
+            fps_samples: [0.0; 60],
+            fps_sample_index: 0,
+        }
+    }
+
+    /// Call at start of frame
+    pub fn begin_frame(&mut self) {
+        self.frame_start = Instant::now();
+    }
+
+    /// Call at end of frame - handles sleeping and FPS calculation
+    pub fn end_frame(&mut self) {
+        let frame_end = Instant::now();
+        let elapsed = (frame_end - self.frame_start).as_secs_f64();
+
+        // Calculate target frame time
+        let target_time = 1.0 / self.target_fps as f64;
+
+        // Sleep if we're running too fast
+        let sleep_time = target_time - elapsed;
+        if sleep_time > 0.001 {
+            thread::sleep(Duration::from_secs_f64(sleep_time));
+        }
+
+        // Recalculate actual frame time
+        let actual_frame_end = Instant::now();
+        self.frame_time = (actual_frame_end - self.frame_start).as_secs_f64();
+
+        // Update FPS counter (rolling average)
+        self.fps_samples[self.fps_sample_index] = 1.0 / self.frame_time;
+        self.fps_sample_index = (self.fps_sample_index + 1) % 60;
+
+        let sum: f64 = self.fps_samples.iter().sum();
+        self.fps = sum / 60.0;
+    }
+
+    /// Get frame time in seconds
+    pub fn frame_time(&self) -> f64 {
+        self.frame_time
+    }
+
+    /// Get frames per second (rolling average)
+    pub fn fps(&self) -> f64 {
+        self.fps
+    }
+}
+
+// =============================================================================
+// Game Timer Classes (for compatibility)
+// =============================================================================
+
+/// Simple elapsed timer
+pub struct Timer {
+    start_time: Option<Instant>,
+    accumulated: Duration,
+}
+
+impl Timer {
+    pub fn new() -> Self {
+        Self {
+            start_time: None,
+            accumulated: Duration::ZERO,
+        }
+    }
+
+    pub fn start(&mut self) {
+        if self.start_time.is_none() {
+            self.start_time = Some(Instant::now());
+        }
+    }
+
+    pub fn stop(&mut self) {
+        if let Some(start) = self.start_time.take() {
+            self.accumulated += start.elapsed();
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.accumulated = Duration::ZERO;
+        if self.start_time.is_some() {
+            self.start_time = Some(Instant::now());
+        }
+    }
+
+    pub fn elapsed_ms(&self) -> u32 {
+        let running = self.start_time.map(|s| s.elapsed()).unwrap_or(Duration::ZERO);
+        (self.accumulated + running).as_millis() as u32
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.start_time.is_some()
+    }
+}
+
+/// Countdown timer
+pub struct CountdownTimer {
+    start_time: Option<Instant>,
+    duration: Duration,
+}
+
+impl CountdownTimer {
+    pub fn new() -> Self {
+        Self {
+            start_time: None,
+            duration: Duration::ZERO,
+        }
+    }
+
+    pub fn set(&mut self, ms: u32) {
+        self.start_time = Some(Instant::now());
+        self.duration = Duration::from_millis(ms as u64);
+    }
+
+    pub fn clear(&mut self) {
+        self.start_time = None;
+        self.duration = Duration::ZERO;
+    }
+
+    pub fn remaining_ms(&self) -> u32 {
+        if let Some(start) = self.start_time {
+            let elapsed = start.elapsed();
+            if elapsed >= self.duration {
+                0
+            } else {
+                (self.duration - elapsed).as_millis() as u32
+            }
+        } else {
+            0
+        }
+    }
+
+    pub fn expired(&self) -> bool {
+        if let Some(start) = self.start_time {
+            start.elapsed() >= self.duration
+        } else {
+            true
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.start_time.is_some() && !self.expired()
+    }
+}
 ```
 
-## Game Loop Integration
+### 5.2 FFI Timer Exports
 
-### Fixed Time Step Game Loop
+File: `platform/src/ffi/timer.rs`
+```rust
+//! Timer FFI exports
 
-```cpp
-// Constants
-const double GAME_TICK_RATE = 15.0;  // Game logic at 15 Hz
-const double TICK_DURATION = 1.0 / GAME_TICK_RATE;
-const int MAX_RENDER_FPS = 60;
+use crate::timer::{self, TimerHandle, INVALID_TIMER_HANDLE};
+use std::ffi::c_void;
 
-// State
-double accumulator = 0.0;
-double previous_time = Platform_GetTime();
+// =============================================================================
+// Basic Time Functions
+// =============================================================================
 
-void Game_Loop() {
-    while (!Platform_ShouldQuit()) {
-        Platform_Frame_Start();
+/// Get milliseconds since platform init
+#[no_mangle]
+pub extern "C" fn Platform_GetTicks() -> u32 {
+    timer::get_ticks()
+}
 
-        // Calculate delta time
-        double current_time = Platform_GetTime();
-        double frame_time = current_time - previous_time;
-        previous_time = current_time;
+/// Sleep for milliseconds
+#[no_mangle]
+pub extern "C" fn Platform_Delay(milliseconds: u32) {
+    timer::delay(milliseconds);
+}
 
-        // Clamp frame time to avoid spiral of death
-        if (frame_time > 0.25) frame_time = 0.25;
+/// Get high-resolution performance counter
+#[no_mangle]
+pub extern "C" fn Platform_GetPerformanceCounter() -> u64 {
+    timer::get_performance_counter()
+}
 
-        accumulator += frame_time;
+/// Get performance counter frequency
+#[no_mangle]
+pub extern "C" fn Platform_GetPerformanceFrequency() -> u64 {
+    timer::get_performance_frequency()
+}
 
-        // Process input
-        Platform_PumpEvents();
+/// Get time in seconds (floating point)
+#[no_mangle]
+pub extern "C" fn Platform_GetTime() -> f64 {
+    timer::get_time()
+}
 
-        // Update game logic at fixed rate
-        while (accumulator >= TICK_DURATION) {
-            Game_Logic_Tick();
-            accumulator -= TICK_DURATION;
-        }
+// =============================================================================
+// Periodic Timers
+// =============================================================================
 
-        // Render (interpolate for smooth animation)
-        double alpha = accumulator / TICK_DURATION;
-        Game_Render(alpha);
+/// Timer callback type for C
+pub type CTimerCallback = extern "C" fn(*mut c_void);
 
-        // Frame rate limiting
-        Platform_Frame_End(MAX_RENDER_FPS);
-    }
+/// Create a periodic timer
+/// Note: The callback will be called from a separate thread!
+#[no_mangle]
+pub extern "C" fn Platform_Timer_Create(
+    interval_ms: u32,
+    callback: CTimerCallback,
+    userdata: *mut c_void,
+) -> TimerHandle {
+    // Wrap C callback
+    let userdata = userdata as usize; // Convert to usize for Send
+    let rust_callback = Box::new(move || {
+        callback(userdata as *mut c_void);
+    });
+
+    timer::create_timer(interval_ms, rust_callback)
+}
+
+/// Destroy a periodic timer
+#[no_mangle]
+pub extern "C" fn Platform_Timer_Destroy(handle: TimerHandle) {
+    timer::destroy_timer(handle);
+}
+
+/// Set timer interval (may require recreating timer)
+#[no_mangle]
+pub extern "C" fn Platform_Timer_SetInterval(_handle: TimerHandle, _interval_ms: u32) {
+    // Not easily supported - would need to recreate timer
+    // Original code rarely changes intervals
+}
+
+// =============================================================================
+// Frame Rate Control
+// =============================================================================
+
+/// Start frame timing
+#[no_mangle]
+pub extern "C" fn Platform_Frame_Start() {
+    // Called from game loop
+}
+
+/// End frame timing with target FPS
+#[no_mangle]
+pub extern "C" fn Platform_Frame_End(_target_fps: i32) {
+    // Called from game loop
+}
+
+/// Get last frame time in seconds
+#[no_mangle]
+pub extern "C" fn Platform_GetFrameTime() -> f64 {
+    0.016 // Default to 60 FPS for now
+}
+
+/// Get current FPS
+#[no_mangle]
+pub extern "C" fn Platform_GetFPS() -> f64 {
+    60.0 // Default for now
 }
 ```
 
 ## Tasks Breakdown
 
 ### Phase 1: Basic Timing (1 day)
-- [ ] Implement `Platform_GetTicks()`, `Platform_Delay()`
-- [ ] Implement high-precision counter functions
-- [ ] Implement `Platform_GetTime()`
+- [ ] Implement `get_ticks()`, `delay()`
+- [ ] Implement high-precision counter
+- [ ] Implement `get_time()`
 - [ ] Test timing accuracy
 
 ### Phase 2: Periodic Timers (1 day)
-- [ ] Implement `Platform_Timer_Create()`
-- [ ] Implement timer callback system
-- [ ] Handle timer destruction safely
-- [ ] Test with audio maintenance timer
+- [ ] Implement timer thread spawning
+- [ ] Implement timer creation/destruction
+- [ ] Handle callback safely
+- [ ] Test with periodic callback
 
-### Phase 3: Compatibility Layer (1 day)
-- [ ] Create `timer_wrapper.h`
-- [ ] Map `QueryPerformanceCounter`
-- [ ] Map `timeSetEvent`/`timeKillEvent`
-- [ ] Map `GetTickCount`/`Sleep`
+### Phase 3: FFI Exports (1 day)
+- [ ] Create FFI wrapper functions
+- [ ] Handle C callback conversion
+- [ ] Verify cbindgen output
+- [ ] Test from C++
 
-### Phase 4: Game Timer Classes (1 day)
-- [ ] Implement `TimerClass`
-- [ ] Implement `CountDownTimerClass`
-- [ ] Verify tick rate conversion
-- [ ] Test with game logic
-
-## Testing Strategy
-
-### Test 1: Accuracy Test
-Measure 1 second with various timing methods, compare to wall clock.
-
-### Test 2: Timer Callback Test
-Create periodic timer, verify callback frequency.
-
-### Test 3: Frame Rate Test
-Run empty game loop, verify consistent FPS.
-
-### Test 4: Game Speed Test
-Run game logic, verify units move at correct speed.
+### Phase 4: Frame Rate Control (1 day)
+- [ ] Implement `FrameRateController`
+- [ ] Implement game timer classes
+- [ ] Verify game runs at correct speed
 
 ## Acceptance Criteria
 
-- [ ] `Platform_GetTicks()` accurate to ±1ms
+- [ ] `get_ticks()` accurate to ±1ms
 - [ ] High-precision timer accurate to microseconds
 - [ ] Periodic timers fire at correct rate
-- [ ] Game loop runs at target FPS
+- [ ] Callbacks work from timer thread
 - [ ] Game logic runs at 15 ticks/second
-- [ ] No timer-related crashes or leaks
+- [ ] No timer-related crashes
 
 ## Estimated Duration
 **3-4 days**
 
 ## Dependencies
-- Plan 02 (Platform Abstraction) headers
-- SDL2 timer subsystem
+- Plan 02 (Platform Abstraction) completed
+- std::time (stable Rust)
 
 ## Next Plan
 Once timing is working, proceed to **Plan 06: Memory Management**

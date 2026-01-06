@@ -1,7 +1,7 @@
-# Plan 10: Networking
+# Plan 10: Networking (Rust Implementation)
 
 ## Objective
-Replace the obsolete IPX/SPX protocol and Windows Winsock async model with modern UDP networking using the enet library, enabling cross-platform multiplayer.
+Replace the obsolete IPX/SPX protocol and Windows Winsock async model with modern UDP networking using the `enet` crate, enabling cross-platform multiplayer.
 
 ## Current State Analysis
 
@@ -41,470 +41,794 @@ WSAAsyncSelect();  // Async socket model
 WSAAsyncGetHostByName(), WSAAsyncGetHostByAddr();
 ```
 
-**Key Classes:**
-```cpp
-class TcpipManagerClass {
-    SOCKET ListenSocket;
-    SOCKET UDPSocket;
-    InternetBufferType ReceiveBuffers[WS_NUM_RX_BUFFERS];
-    InternetBufferType TransmitBuffers[WS_NUM_TX_BUFFERS];
-};
-```
+## Rust enet-Based Implementation
 
-## enet-Based Implementation
-
-Using enet provides:
+Using the `enet` crate provides:
 - Reliable and unreliable packet delivery
 - Automatic connection management
 - NAT punch-through friendly
-- Cross-platform (POSIX sockets)
+- Cross-platform (uses native sockets)
 
-### 10.1 Network Manager
+### Cargo.toml Dependencies
 
-File: `src/platform/network_enet.cpp`
-```cpp
-#include "platform/platform_network.h"
-#include <enet/enet.h>
-#include <string>
-#include <vector>
-#include <mutex>
-#include <queue>
+```toml
+[dependencies]
+enet = "0.3"
+log = "0.4"
+thiserror = "1.0"
+```
 
-namespace {
+## Rust Module Structure
 
-bool g_network_initialized = false;
+```
+platform/src/
+├── lib.rs
+└── network/
+    ├── mod.rs        # Module root and FFI exports
+    ├── host.rs       # Server/host implementation
+    ├── client.rs     # Client connection
+    ├── packet.rs     # Packet handling
+    └── adapter.rs    # Game protocol adapter
+```
 
-} // anonymous namespace
+### 10.1 Core Network Types
 
-//=============================================================================
-// Initialization
-//=============================================================================
+File: `platform/src/network/mod.rs`
+```rust
+//! Networking module using enet for reliable UDP
+//!
+//! Replaces the obsolete IPX/SPX and Windows Winsock implementations.
 
-bool Platform_Network_Init(void) {
-    if (g_network_initialized) return true;
+pub mod host;
+pub mod client;
+pub mod packet;
+pub mod adapter;
 
-    if (enet_initialize() != 0) {
-        Platform_SetError("enet_initialize failed");
-        return false;
-    }
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+use thiserror::Error;
 
-    g_network_initialized = true;
-    return true;
+/// Network subsystem state
+static NETWORK_STATE: Lazy<Mutex<Option<NetworkState>>> = Lazy::new(|| Mutex::new(None));
+
+struct NetworkState {
+    // enet is initialized
+    initialized: bool,
 }
 
-void Platform_Network_Shutdown(void) {
-    if (!g_network_initialized) return;
+#[derive(Error, Debug)]
+pub enum NetworkError {
+    #[error("Network not initialized")]
+    NotInitialized,
 
-    enet_deinitialize();
-    g_network_initialized = false;
+    #[error("Already initialized")]
+    AlreadyInitialized,
+
+    #[error("enet initialization failed")]
+    EnetInitFailed,
+
+    #[error("Connection failed: {0}")]
+    ConnectionFailed(String),
+
+    #[error("Host creation failed")]
+    HostCreationFailed,
+
+    #[error("Send failed")]
+    SendFailed,
+
+    #[error("Invalid address: {0}")]
+    InvalidAddress(String),
+
+    #[error("Timeout")]
+    Timeout,
+
+    #[error("Peer disconnected")]
+    Disconnected,
+}
+
+pub type NetworkResult<T> = Result<T, NetworkError>;
+
+// =============================================================================
+// Initialization
+// =============================================================================
+
+/// Initialize the networking subsystem
+pub fn init() -> NetworkResult<()> {
+    let mut state = NETWORK_STATE.lock().unwrap();
+
+    if state.is_some() {
+        return Err(NetworkError::AlreadyInitialized);
+    }
+
+    // enet::initialize() returns Result
+    enet::initialize().map_err(|_| NetworkError::EnetInitFailed)?;
+
+    *state = Some(NetworkState {
+        initialized: true,
+    });
+
+    log::info!("Network subsystem initialized");
+    Ok(())
+}
+
+/// Shutdown the networking subsystem
+pub fn shutdown() {
+    let mut state = NETWORK_STATE.lock().unwrap();
+
+    if state.take().is_some() {
+        // enet cleans up automatically when dropped
+        log::info!("Network subsystem shutdown");
+    }
+}
+
+/// Check if networking is initialized
+pub fn is_initialized() -> bool {
+    NETWORK_STATE.lock().unwrap().is_some()
+}
+
+// =============================================================================
+// FFI Exports
+// =============================================================================
+
+#[no_mangle]
+pub extern "C" fn Platform_Network_Init() -> i32 {
+    crate::ffi::catch_panic(|| init())
+}
+
+#[no_mangle]
+pub extern "C" fn Platform_Network_Shutdown() {
+    shutdown();
+}
+
+#[no_mangle]
+pub extern "C" fn Platform_Network_IsInitialized() -> i32 {
+    if is_initialized() { 1 } else { 0 }
 }
 ```
 
 ### 10.2 Host (Server) Implementation
 
-```cpp
-//=============================================================================
-// Host Structure
-//=============================================================================
+File: `platform/src/network/host.rs`
+```rust
+//! Network host (server) implementation
 
-struct PlatformHost {
-    ENetHost* host;
-    std::vector<ENetPeer*> peers;
-    std::queue<ReceivedPacket> received_packets;
-    std::mutex mutex;
-};
+use super::{NetworkError, NetworkResult};
+use std::collections::VecDeque;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
-PlatformHost* Platform_Host_Create(const HostConfig* config) {
-    if (!g_network_initialized) return nullptr;
-
-    ENetAddress address;
-    address.host = ENET_HOST_ANY;
-    address.port = config->port;
-
-    ENetHost* host = enet_host_create(
-        &address,
-        config->max_clients,
-        config->channel_count,
-        0,  // Incoming bandwidth (0 = unlimited)
-        0   // Outgoing bandwidth (0 = unlimited)
-    );
-
-    if (!host) {
-        Platform_SetError("enet_host_create failed");
-        return nullptr;
-    }
-
-    PlatformHost* phost = new PlatformHost();
-    phost->host = host;
-    return phost;
+/// Configuration for creating a host
+#[repr(C)]
+pub struct HostConfig {
+    pub port: u16,
+    pub max_clients: usize,
+    pub channel_count: usize,
+    pub incoming_bandwidth: u32,  // 0 = unlimited
+    pub outgoing_bandwidth: u32,  // 0 = unlimited
 }
 
-void Platform_Host_Destroy(PlatformHost* host) {
-    if (!host) return;
-
-    // Disconnect all peers
-    for (ENetPeer* peer : host->peers) {
-        enet_peer_disconnect(peer, 0);
-    }
-
-    // Wait for disconnects
-    ENetEvent event;
-    while (enet_host_service(host->host, &event, 1000) > 0) {
-        if (event.type == ENET_EVENT_TYPE_RECEIVE) {
-            enet_packet_destroy(event.packet);
+impl Default for HostConfig {
+    fn default() -> Self {
+        Self {
+            port: 5555,
+            max_clients: 8,
+            channel_count: 2,
+            incoming_bandwidth: 0,
+            outgoing_bandwidth: 0,
         }
     }
-
-    // Force disconnect remaining
-    for (ENetPeer* peer : host->peers) {
-        enet_peer_reset(peer);
-    }
-
-    enet_host_destroy(host->host);
-    delete host;
 }
 
-void Platform_Host_Service(PlatformHost* host, uint32_t timeout_ms) {
-    if (!host) return;
+/// A received packet
+pub struct ReceivedPacket {
+    pub peer_id: usize,
+    pub channel: u8,
+    pub data: Vec<u8>,
+}
 
-    ENetEvent event;
+/// Opaque host handle for FFI
+pub struct PlatformHost {
+    host: enet::Host<()>,
+    peers: Vec<Option<enet::Peer<'static, ()>>>,
+    received_packets: VecDeque<ReceivedPacket>,
+    max_clients: usize,
+}
 
-    while (enet_host_service(host->host, &event, timeout_ms) > 0) {
-        switch (event.type) {
-            case ENET_EVENT_TYPE_CONNECT: {
-                std::lock_guard<std::mutex> lock(host->mutex);
-                host->peers.push_back(event.peer);
-                Platform_Log(LOG_INFO, "Peer connected from %x:%u",
-                            event.peer->address.host, event.peer->address.port);
-                break;
-            }
+impl PlatformHost {
+    /// Create a new host (server)
+    pub fn new(config: &HostConfig) -> NetworkResult<Self> {
+        let address = enet::Address::new(
+            std::net::Ipv4Addr::UNSPECIFIED,
+            config.port,
+        );
 
-            case ENET_EVENT_TYPE_RECEIVE: {
-                std::lock_guard<std::mutex> lock(host->mutex);
+        let host = enet::Host::new(
+            address,
+            config.max_clients,
+            config.channel_count,
+            config.incoming_bandwidth,
+            config.outgoing_bandwidth,
+        ).map_err(|_| NetworkError::HostCreationFailed)?;
 
-                ReceivedPacket packet;
-                packet.peer = (PlatformPeer*)event.peer;
-                packet.channel = event.channelID;
-                packet.size = event.packet->dataLength;
-                packet.data = malloc(packet.size);
-                memcpy(packet.data, event.packet->data, packet.size);
+        let peers = vec![None; config.max_clients];
 
-                host->received_packets.push(packet);
-                enet_packet_destroy(event.packet);
-                break;
-            }
+        log::info!("Created host on port {}", config.port);
 
-            case ENET_EVENT_TYPE_DISCONNECT: {
-                std::lock_guard<std::mutex> lock(host->mutex);
-                auto it = std::find(host->peers.begin(), host->peers.end(), event.peer);
-                if (it != host->peers.end()) {
-                    host->peers.erase(it);
+        Ok(Self {
+            host,
+            peers,
+            received_packets: VecDeque::new(),
+            max_clients: config.max_clients,
+        })
+    }
+
+    /// Service the host (process events)
+    pub fn service(&mut self, timeout_ms: u32) -> NetworkResult<()> {
+        let timeout = std::time::Duration::from_millis(timeout_ms as u64);
+
+        loop {
+            match self.host.service(timeout) {
+                Ok(Some(event)) => {
+                    self.handle_event(event);
                 }
-                Platform_Log(LOG_INFO, "Peer disconnected");
-                break;
+                Ok(None) => break,
+                Err(e) => {
+                    log::error!("Host service error: {:?}", e);
+                    break;
+                }
             }
-
-            default:
-                break;
         }
 
-        timeout_ms = 0;  // Only block on first iteration
+        Ok(())
     }
+
+    fn handle_event(&mut self, event: enet::Event<()>) {
+        match event {
+            enet::Event::Connect(peer) => {
+                // Find a slot for the new peer
+                for (i, slot) in self.peers.iter_mut().enumerate() {
+                    if slot.is_none() {
+                        log::info!("Peer {} connected from {:?}", i, peer.address());
+                        // Note: This is simplified - actual implementation needs proper lifetime handling
+                        break;
+                    }
+                }
+            }
+
+            enet::Event::Disconnect(peer, _data) => {
+                log::info!("Peer disconnected");
+                // Remove peer from slots
+                for slot in self.peers.iter_mut() {
+                    // Match by address or ID
+                    *slot = None;
+                }
+            }
+
+            enet::Event::Receive { sender, channel_id, packet } => {
+                let peer_id = 0; // Would need to look up peer index
+
+                self.received_packets.push_back(ReceivedPacket {
+                    peer_id,
+                    channel: channel_id,
+                    data: packet.data().to_vec(),
+                });
+            }
+        }
+    }
+
+    /// Get the next received packet
+    pub fn receive(&mut self) -> Option<ReceivedPacket> {
+        self.received_packets.pop_front()
+    }
+
+    /// Send packet to all connected peers
+    pub fn broadcast(&mut self, channel: u8, data: &[u8], reliable: bool) -> NetworkResult<()> {
+        let packet = if reliable {
+            enet::Packet::reliable(data)
+        } else {
+            enet::Packet::unreliable(data)
+        };
+
+        self.host.broadcast(channel, packet);
+        Ok(())
+    }
+
+    /// Get number of connected peers
+    pub fn peer_count(&self) -> usize {
+        self.peers.iter().filter(|p| p.is_some()).count()
+    }
+}
+
+// =============================================================================
+// FFI Exports
+// =============================================================================
+
+/// Create a new network host
+#[no_mangle]
+pub extern "C" fn Platform_Host_Create(
+    port: u16,
+    max_clients: i32,
+    channel_count: i32,
+) -> *mut PlatformHost {
+    let config = HostConfig {
+        port,
+        max_clients: max_clients as usize,
+        channel_count: channel_count as usize,
+        ..Default::default()
+    };
+
+    match PlatformHost::new(&config) {
+        Ok(host) => Box::into_raw(Box::new(host)),
+        Err(e) => {
+            log::error!("Failed to create host: {}", e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Destroy a network host
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Host_Destroy(host: *mut PlatformHost) {
+    if !host.is_null() {
+        drop(Box::from_raw(host));
+    }
+}
+
+/// Service the host (process events)
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Host_Service(
+    host: *mut PlatformHost,
+    timeout_ms: u32,
+) -> i32 {
+    if host.is_null() {
+        return -1;
+    }
+
+    match (*host).service(timeout_ms) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Receive a packet from the host
+///
+/// Returns packet size, or 0 if no packet available, or -1 on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Host_Receive(
+    host: *mut PlatformHost,
+    peer_id: *mut i32,
+    channel: *mut u8,
+    buffer: *mut u8,
+    buffer_size: i32,
+) -> i32 {
+    if host.is_null() || buffer.is_null() {
+        return -1;
+    }
+
+    match (*host).receive() {
+        Some(packet) => {
+            let copy_size = std::cmp::min(packet.data.len(), buffer_size as usize);
+
+            std::ptr::copy_nonoverlapping(
+                packet.data.as_ptr(),
+                buffer,
+                copy_size,
+            );
+
+            if !peer_id.is_null() {
+                *peer_id = packet.peer_id as i32;
+            }
+            if !channel.is_null() {
+                *channel = packet.channel;
+            }
+
+            copy_size as i32
+        }
+        None => 0,
+    }
+}
+
+/// Broadcast a packet to all connected peers
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Host_Broadcast(
+    host: *mut PlatformHost,
+    channel: u8,
+    data: *const u8,
+    size: i32,
+    reliable: i32,
+) -> i32 {
+    if host.is_null() || data.is_null() || size <= 0 {
+        return -1;
+    }
+
+    let data_slice = std::slice::from_raw_parts(data, size as usize);
+
+    match (*host).broadcast(channel, data_slice, reliable != 0) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Get number of connected peers
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Host_PeerCount(host: *mut PlatformHost) -> i32 {
+    if host.is_null() {
+        return 0;
+    }
+    (*host).peer_count() as i32
 }
 ```
 
 ### 10.3 Client Implementation
 
-```cpp
-//=============================================================================
-// Client Connection
-//=============================================================================
+File: `platform/src/network/client.rs`
+```rust
+//! Network client implementation
 
-PlatformPeer* Platform_Connect(const ConnectConfig* config, uint32_t timeout_ms) {
-    if (!g_network_initialized) return nullptr;
+use super::{NetworkError, NetworkResult};
+use std::collections::VecDeque;
+use std::time::Duration;
 
-    // Create client host
-    ENetHost* client = enet_host_create(
-        nullptr,  // No address = client
-        1,        // Only 1 outgoing connection
-        config->channel_count,
-        0, 0
-    );
-
-    if (!client) {
-        Platform_SetError("enet_host_create failed for client");
-        return nullptr;
-    }
-
-    // Resolve address
-    ENetAddress address;
-    enet_address_set_host(&address, config->host_address);
-    address.port = config->port;
-
-    // Initiate connection
-    ENetPeer* peer = enet_host_connect(client, &address, config->channel_count, 0);
-    if (!peer) {
-        enet_host_destroy(client);
-        Platform_SetError("enet_host_connect failed");
-        return nullptr;
-    }
-
-    // Wait for connection
-    ENetEvent event;
-    if (enet_host_service(client, &event, timeout_ms) > 0 &&
-        event.type == ENET_EVENT_TYPE_CONNECT) {
-        Platform_Log(LOG_INFO, "Connected to %s:%u", config->host_address, config->port);
-        return (PlatformPeer*)peer;
-    }
-
-    enet_peer_reset(peer);
-    enet_host_destroy(client);
-    Platform_SetError("Connection timed out");
-    return nullptr;
+/// Client connection configuration
+#[repr(C)]
+pub struct ConnectConfig {
+    pub host_address: [u8; 64],  // Null-terminated string
+    pub port: u16,
+    pub channel_count: usize,
+    pub timeout_ms: u32,
 }
 
-void Platform_Disconnect(PlatformPeer* peer) {
-    if (!peer) return;
+/// Client connection state
+pub struct PlatformClient {
+    host: enet::Host<()>,
+    server_peer: Option<enet::Peer<'static, ()>>,
+    received_packets: VecDeque<Vec<u8>>,
+    connected: bool,
+}
 
-    ENetPeer* epeer = (ENetPeer*)peer;
-    enet_peer_disconnect(epeer, 0);
+impl PlatformClient {
+    /// Create a new client and connect to server
+    pub fn connect(address: &str, port: u16, timeout_ms: u32) -> NetworkResult<Self> {
+        // Create client host (no address = client mode)
+        let host = enet::Host::<()>::create_client(
+            1,  // One outgoing connection
+            2,  // Channel count
+            0,  // Incoming bandwidth (unlimited)
+            0,  // Outgoing bandwidth (unlimited)
+        ).map_err(|_| NetworkError::HostCreationFailed)?;
 
-    // Wait for acknowledgment
-    ENetEvent event;
-    ENetHost* host = epeer->host;
+        // Parse address
+        let addr: std::net::Ipv4Addr = address.parse()
+            .map_err(|_| NetworkError::InvalidAddress(address.to_string()))?;
 
-    while (enet_host_service(host, &event, 1000) > 0) {
-        switch (event.type) {
-            case ENET_EVENT_TYPE_RECEIVE:
-                enet_packet_destroy(event.packet);
-                break;
-            case ENET_EVENT_TYPE_DISCONNECT:
-                Platform_Log(LOG_INFO, "Disconnected");
-                return;
-            default:
-                break;
+        let enet_addr = enet::Address::new(addr, port);
+
+        log::info!("Connecting to {}:{}", address, port);
+
+        // Note: Actual connection handling would be more complex
+        // This is a simplified version
+
+        Ok(Self {
+            host,
+            server_peer: None,
+            received_packets: VecDeque::new(),
+            connected: false,
+        })
+    }
+
+    /// Service the client (process events)
+    pub fn service(&mut self, timeout_ms: u32) -> NetworkResult<()> {
+        let timeout = Duration::from_millis(timeout_ms as u64);
+
+        loop {
+            match self.host.service(timeout) {
+                Ok(Some(event)) => {
+                    match event {
+                        enet::Event::Connect(_peer) => {
+                            log::info!("Connected to server");
+                            self.connected = true;
+                        }
+                        enet::Event::Disconnect(_peer, _) => {
+                            log::info!("Disconnected from server");
+                            self.connected = false;
+                            self.server_peer = None;
+                        }
+                        enet::Event::Receive { packet, .. } => {
+                            self.received_packets.push_back(packet.data().to_vec());
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    log::error!("Client service error: {:?}", e);
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if connected to server
+    pub fn is_connected(&self) -> bool {
+        self.connected
+    }
+
+    /// Send data to server
+    pub fn send(&mut self, channel: u8, data: &[u8], reliable: bool) -> NetworkResult<()> {
+        if !self.connected {
+            return Err(NetworkError::Disconnected);
+        }
+
+        let packet = if reliable {
+            enet::Packet::reliable(data)
+        } else {
+            enet::Packet::unreliable(data)
+        };
+
+        // Would send to server_peer
+        // self.server_peer.as_mut().unwrap().send(channel, packet);
+
+        Ok(())
+    }
+
+    /// Receive data from server
+    pub fn receive(&mut self) -> Option<Vec<u8>> {
+        self.received_packets.pop_front()
+    }
+
+    /// Disconnect from server
+    pub fn disconnect(&mut self) {
+        if let Some(ref mut _peer) = self.server_peer {
+            // peer.disconnect(0);
+            self.connected = false;
         }
     }
-
-    enet_peer_reset(epeer);
 }
 
-bool Platform_IsConnected(PlatformPeer* peer) {
-    if (!peer) return false;
-    ENetPeer* epeer = (ENetPeer*)peer;
-    return epeer->state == ENET_PEER_STATE_CONNECTED;
+// =============================================================================
+// FFI Exports
+// =============================================================================
+
+/// Connect to a server
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Client_Connect(
+    address: *const i8,  // C string
+    port: u16,
+    timeout_ms: u32,
+) -> *mut PlatformClient {
+    if address.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let addr_str = match std::ffi::CStr::from_ptr(address).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    match PlatformClient::connect(addr_str, port, timeout_ms) {
+        Ok(client) => Box::into_raw(Box::new(client)),
+        Err(e) => {
+            log::error!("Failed to connect: {}", e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Destroy a client connection
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Client_Destroy(client: *mut PlatformClient) {
+    if !client.is_null() {
+        let mut client = Box::from_raw(client);
+        client.disconnect();
+    }
+}
+
+/// Service the client
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Client_Service(
+    client: *mut PlatformClient,
+    timeout_ms: u32,
+) -> i32 {
+    if client.is_null() {
+        return -1;
+    }
+
+    match (*client).service(timeout_ms) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Check if connected
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Client_IsConnected(client: *mut PlatformClient) -> i32 {
+    if client.is_null() {
+        return 0;
+    }
+    if (*client).is_connected() { 1 } else { 0 }
+}
+
+/// Send data to server
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Client_Send(
+    client: *mut PlatformClient,
+    channel: u8,
+    data: *const u8,
+    size: i32,
+    reliable: i32,
+) -> i32 {
+    if client.is_null() || data.is_null() || size <= 0 {
+        return -1;
+    }
+
+    let data_slice = std::slice::from_raw_parts(data, size as usize);
+
+    match (*client).send(channel, data_slice, reliable != 0) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Receive data from server
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Client_Receive(
+    client: *mut PlatformClient,
+    buffer: *mut u8,
+    buffer_size: i32,
+) -> i32 {
+    if client.is_null() || buffer.is_null() {
+        return -1;
+    }
+
+    match (*client).receive() {
+        Some(data) => {
+            let copy_size = std::cmp::min(data.len(), buffer_size as usize);
+            std::ptr::copy_nonoverlapping(data.as_ptr(), buffer, copy_size);
+            copy_size as i32
+        }
+        None => 0,
+    }
 }
 ```
 
-### 10.4 Sending and Receiving
+### 10.4 Packet Types
 
-```cpp
-//=============================================================================
-// Packet Transmission
-//=============================================================================
+File: `platform/src/network/packet.rs`
+```rust
+//! Packet type definitions for game protocol
 
-bool Platform_Send(PlatformPeer* peer, int channel, const void* data, int size, PacketType type) {
-    if (!peer || !data || size <= 0) return false;
+/// Packet delivery mode
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PacketType {
+    /// Reliable, ordered delivery
+    Reliable = 0,
+    /// Unreliable delivery (may be dropped or reordered)
+    Unreliable = 1,
+    /// Unreliable, unsequenced (no ordering guarantees)
+    Unsequenced = 2,
+}
 
-    ENetPeer* epeer = (ENetPeer*)peer;
+/// Game packet header (matches original game protocol)
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct GamePacketHeader {
+    pub packet_type: u16,
+    pub sequence: u16,
+    pub player_id: u8,
+    pub flags: u8,
+}
 
-    enet_uint32 flags = 0;
-    switch (type) {
-        case PACKET_RELIABLE:
-            flags = ENET_PACKET_FLAG_RELIABLE;
-            break;
-        case PACKET_UNRELIABLE:
-            flags = 0;
-            break;
-        case PACKET_UNSEQUENCED:
-            flags = ENET_PACKET_FLAG_UNSEQUENCED;
-            break;
+/// Common game packet types (from original game)
+#[repr(u16)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GamePacketKind {
+    // Connection establishment
+    SerialConnect = 100,
+    SerialGameOptions = 101,
+    SerialSignOff = 102,
+    SerialGo = 103,
+
+    // Game discovery
+    RequestGameInfo = 110,
+    GameInfo = 111,
+    JoinGame = 112,
+    JoinAccepted = 113,
+    JoinRejected = 114,
+
+    // Gameplay
+    GameData = 120,
+    GameSync = 121,
+    GameChat = 122,
+
+    // Keep-alive
+    Ping = 200,
+    Pong = 201,
+}
+
+impl From<u16> for GamePacketKind {
+    fn from(value: u16) -> Self {
+        match value {
+            100 => GamePacketKind::SerialConnect,
+            101 => GamePacketKind::SerialGameOptions,
+            102 => GamePacketKind::SerialSignOff,
+            103 => GamePacketKind::SerialGo,
+            110 => GamePacketKind::RequestGameInfo,
+            111 => GamePacketKind::GameInfo,
+            112 => GamePacketKind::JoinGame,
+            113 => GamePacketKind::JoinAccepted,
+            114 => GamePacketKind::JoinRejected,
+            120 => GamePacketKind::GameData,
+            121 => GamePacketKind::GameSync,
+            122 => GamePacketKind::GameChat,
+            200 => GamePacketKind::Ping,
+            201 => GamePacketKind::Pong,
+            _ => GamePacketKind::GameData, // Default
+        }
+    }
+}
+
+/// Serialize a game packet
+pub fn serialize_packet(header: &GamePacketHeader, payload: &[u8]) -> Vec<u8> {
+    let header_size = std::mem::size_of::<GamePacketHeader>();
+    let mut buffer = Vec::with_capacity(header_size + payload.len());
+
+    // Copy header bytes
+    let header_bytes = unsafe {
+        std::slice::from_raw_parts(
+            header as *const GamePacketHeader as *const u8,
+            header_size,
+        )
+    };
+    buffer.extend_from_slice(header_bytes);
+
+    // Copy payload
+    buffer.extend_from_slice(payload);
+
+    buffer
+}
+
+/// Deserialize a game packet
+pub fn deserialize_packet(data: &[u8]) -> Option<(GamePacketHeader, &[u8])> {
+    let header_size = std::mem::size_of::<GamePacketHeader>();
+
+    if data.len() < header_size {
+        return None;
     }
 
-    ENetPacket* packet = enet_packet_create(data, size, flags);
-    if (!packet) return false;
+    let header = unsafe {
+        std::ptr::read_unaligned(data.as_ptr() as *const GamePacketHeader)
+    };
 
-    int result = enet_peer_send(epeer, channel, packet);
-    return result == 0;
-}
+    let payload = &data[header_size..];
 
-bool Platform_Receive(PlatformHost* host, ReceivedPacket* packet) {
-    if (!host) return false;
-
-    std::lock_guard<std::mutex> lock(host->mutex);
-
-    if (host->received_packets.empty()) {
-        return false;
-    }
-
-    *packet = host->received_packets.front();
-    host->received_packets.pop();
-    return true;
-}
-
-void Platform_FreePacket(ReceivedPacket* packet) {
-    if (packet && packet->data) {
-        free(packet->data);
-        packet->data = nullptr;
-    }
-}
-
-//=============================================================================
-// Peer Information
-//=============================================================================
-
-void Platform_GetPeerAddress(PlatformPeer* peer, char* buffer, int buffer_size) {
-    if (!peer || !buffer || buffer_size <= 0) return;
-
-    ENetPeer* epeer = (ENetPeer*)peer;
-    enet_address_get_host_ip(&epeer->address, buffer, buffer_size);
-}
-
-uint32_t Platform_GetPeerRTT(PlatformPeer* peer) {
-    if (!peer) return 0;
-    ENetPeer* epeer = (ENetPeer*)peer;
-    return epeer->roundTripTime;
+    Some((header, payload))
 }
 ```
 
-### 10.5 Game Protocol Adapter
-
-Bridge between old IPX-style game code and new enet networking:
-
-File: `src/game/network_adapter.cpp`
-```cpp
-#include "platform/platform_network.h"
-
-//=============================================================================
-// Game Packet Types (from original game)
-//=============================================================================
-
-enum GamePacketType {
-    PACKET_SERIAL_CONNECT = 100,
-    PACKET_SERIAL_GAME_OPTIONS,
-    PACKET_SERIAL_SIGN_OFF,
-    PACKET_SERIAL_GO,
-    PACKET_REQUEST_GAME_INFO,
-    PACKET_GAME_INFO,
-    PACKET_JOIN_GAME,
-    PACKET_JOIN_ACCEPTED,
-    PACKET_GAME_DATA,
-    // ... etc
-};
-
-//=============================================================================
-// Session Discovery (Replaces IPX Broadcast)
-//=============================================================================
-
-// Use a simple approach: connect to known server or use lobby
-
-struct GameSession {
-    char name[64];
-    char host[64];
-    uint16_t port;
-    int num_players;
-    int max_players;
-    bool passworded;
-};
-
-// For LAN discovery, could use UDP broadcast on local network
-// For internet play, would need a lobby/master server
-
-//=============================================================================
-// Connection Manager (Replaces TcpipManagerClass)
-//=============================================================================
-
-class NetworkManager {
-private:
-    PlatformHost* host;
-    PlatformPeer* server_peer;  // If client
-    bool is_host;
-    int player_id;
-
-public:
-    NetworkManager() : host(nullptr), server_peer(nullptr), is_host(false), player_id(0) {}
-
-    bool HostGame(const char* game_name, uint16_t port, int max_players) {
-        HostConfig config;
-        config.port = port;
-        config.max_clients = max_players;
-        config.channel_count = 2;  // Reliable + unreliable
-
-        host = Platform_Host_Create(&config);
-        if (!host) return false;
-
-        is_host = true;
-        player_id = 0;  // Host is player 0
-        return true;
-    }
-
-    bool JoinGame(const char* address, uint16_t port) {
-        ConnectConfig config;
-        config.host_address = address;
-        config.port = port;
-        config.channel_count = 2;
-
-        server_peer = Platform_Connect(&config, 5000);
-        if (!server_peer) return false;
-
-        is_host = false;
-        return true;
-    }
-
-    void Disconnect() {
-        if (server_peer) {
-            Platform_Disconnect(server_peer);
-            server_peer = nullptr;
-        }
-        if (host) {
-            Platform_Host_Destroy(host);
-            host = nullptr;
-        }
-    }
-
-    bool SendToAll(const void* data, int size, bool reliable) {
-        // Implementation depends on host/client role
-        return true;
-    }
-
-    bool SendTo(int player, const void* data, int size, bool reliable) {
-        // Send to specific player
-        return true;
-    }
-
-    void Update() {
-        if (host) {
-            Platform_Host_Service(host, 0);
-        }
-        // Process received packets...
-    }
-};
-
-// Global network manager
-NetworkManager* Network = nullptr;
-```
-
-### 10.6 Compatibility Layer
+### 10.5 Compatibility Layer
 
 File: `include/compat/network_wrapper.h`
-```cpp
+```c
 #ifndef NETWORK_WRAPPER_H
 #define NETWORK_WRAPPER_H
 
-#include "platform/platform_network.h"
+#include "platform.h"
 
-//=============================================================================
-// Winsock Compatibility
-//=============================================================================
+/*
+ * Winsock Compatibility Layer
+ * Provides stub definitions for Windows socket types
+ */
 
-// Socket type
+/* Socket type */
 typedef int SOCKET;
 #define INVALID_SOCKET (-1)
 #define SOCKET_ERROR   (-1)
 
-// Address structures
+/* Address structures (stubs) */
 struct in_addr {
-    uint32_t s_addr;
+    unsigned int s_addr;
 };
 
 struct sockaddr_in {
@@ -519,56 +843,333 @@ struct sockaddr {
     char sa_data[14];
 };
 
-// Socket functions (stubs - actual networking uses enet)
-inline int closesocket(SOCKET s) { return 0; }
-inline int WSAGetLastError() { return 0; }
+/* Socket functions - all return error (use platform networking instead) */
+static inline int closesocket(SOCKET s) { (void)s; return 0; }
+static inline int WSAGetLastError(void) { return 0; }
+static inline int WSAStartup(unsigned short v, void* d) { (void)v; (void)d; return 0; }
+static inline int WSACleanup(void) { return 0; }
 
-//=============================================================================
-// IPX Compatibility (Stub Everything)
-//=============================================================================
+/*
+ * IPX Compatibility Layer
+ * IPX is completely obsolete - stub out everything
+ */
 
-// IPX is completely obsolete - stub out all functions
 struct IPXAddressClass {
-    // Empty - no longer used
+    /* Empty - no longer used */
+    char _unused;
 };
 
-inline bool IPX_Initialise() { return false; }
-inline void IPX_Shutdown() {}
-inline bool IPX_Send_Packet(void* data, int size, void* addr) { return false; }
-inline bool IPX_Receive_Packet(void* data, int* size, void* addr) { return false; }
+static inline int IPX_Initialise(void) { return 0; }  /* Always fails */
+static inline void IPX_Shutdown(void) {}
+static inline int IPX_Send_Packet(void* d, int s, void* a) { (void)d; (void)s; (void)a; return 0; }
+static inline int IPX_Receive_Packet(void* d, int* s, void* a) { (void)d; (void)s; (void)a; return 0; }
 
-// Mark IPX as unavailable
-inline bool Is_IPX_Available() { return false; }
+/* Mark IPX as unavailable */
+static inline int Is_IPX_Available(void) { return 0; }
 
-#endif // NETWORK_WRAPPER_H
+#endif /* NETWORK_WRAPPER_H */
 ```
 
-## Game Integration Strategy
+### 10.6 Game Protocol Adapter
 
-### 10.7 Modifications to Game Code
+File: `platform/src/network/adapter.rs`
+```rust
+//! Adapter between game protocol and enet networking
+//!
+//! This module bridges the old game networking API with the new enet-based system.
 
-The networking code in Red Alert is extensive. Key areas to modify:
+use super::{NetworkResult, NetworkError};
+use super::host::PlatformHost;
+use super::client::PlatformClient;
+use super::packet::{GamePacketHeader, GamePacketKind, PacketType};
 
-1. **Session.cpp** - Game session management
-2. **NetPlay.cpp** - Multiplayer game logic
-3. **Queue.cpp** - Command queue synchronization
+/// Game session information (for discovery/joining)
+#[repr(C)]
+pub struct GameSession {
+    pub name: [u8; 64],
+    pub host_address: [u8; 64],
+    pub port: u16,
+    pub num_players: u8,
+    pub max_players: u8,
+    pub passworded: u8,
+    pub game_version: u32,
+}
 
-Approach:
-1. Create adapter layer that mimics old API
-2. Replace IPX calls with "not available"
-3. Modify TCP/IP path to use enet
-4. Update UI to remove IPX options
+/// Network manager that wraps host or client functionality
+pub struct NetworkManager {
+    mode: NetworkMode,
+    local_player_id: u8,
+    game_name: String,
+}
+
+enum NetworkMode {
+    None,
+    Host(Box<PlatformHost>),
+    Client(Box<PlatformClient>),
+}
+
+impl NetworkManager {
+    /// Create a new network manager
+    pub fn new() -> Self {
+        Self {
+            mode: NetworkMode::None,
+            local_player_id: 0,
+            game_name: String::new(),
+        }
+    }
+
+    /// Host a new game session
+    pub fn host_game(
+        &mut self,
+        game_name: &str,
+        port: u16,
+        max_players: usize,
+    ) -> NetworkResult<()> {
+        use super::host::HostConfig;
+
+        let config = HostConfig {
+            port,
+            max_clients: max_players,
+            channel_count: 2,
+            ..Default::default()
+        };
+
+        let host = PlatformHost::new(&config)?;
+
+        self.mode = NetworkMode::Host(Box::new(host));
+        self.local_player_id = 0;  // Host is player 0
+        self.game_name = game_name.to_string();
+
+        log::info!("Hosting game '{}' on port {}", game_name, port);
+        Ok(())
+    }
+
+    /// Join an existing game session
+    pub fn join_game(&mut self, address: &str, port: u16) -> NetworkResult<()> {
+        let client = PlatformClient::connect(address, port, 5000)?;
+
+        self.mode = NetworkMode::Client(Box::new(client));
+        // Player ID will be assigned by host
+
+        log::info!("Joining game at {}:{}", address, port);
+        Ok(())
+    }
+
+    /// Disconnect from current session
+    pub fn disconnect(&mut self) {
+        match &mut self.mode {
+            NetworkMode::None => {}
+            NetworkMode::Host(_) => {
+                log::info!("Closing hosted game");
+            }
+            NetworkMode::Client(client) => {
+                client.disconnect();
+                log::info!("Disconnected from game");
+            }
+        }
+        self.mode = NetworkMode::None;
+    }
+
+    /// Service the network (process events)
+    pub fn update(&mut self) -> NetworkResult<()> {
+        match &mut self.mode {
+            NetworkMode::None => Ok(()),
+            NetworkMode::Host(host) => host.service(0),
+            NetworkMode::Client(client) => client.service(0),
+        }
+    }
+
+    /// Send game data to all players (host) or to host (client)
+    pub fn send_game_data(&mut self, data: &[u8], reliable: bool) -> NetworkResult<()> {
+        let channel = if reliable { 0 } else { 1 };
+
+        match &mut self.mode {
+            NetworkMode::None => Err(NetworkError::NotInitialized),
+            NetworkMode::Host(host) => host.broadcast(channel, data, reliable),
+            NetworkMode::Client(client) => client.send(channel, data, reliable),
+        }
+    }
+
+    /// Check if we are the host
+    pub fn is_host(&self) -> bool {
+        matches!(self.mode, NetworkMode::Host(_))
+    }
+
+    /// Check if connected
+    pub fn is_connected(&self) -> bool {
+        match &self.mode {
+            NetworkMode::None => false,
+            NetworkMode::Host(_) => true,
+            NetworkMode::Client(client) => client.is_connected(),
+        }
+    }
+
+    /// Get local player ID
+    pub fn local_player_id(&self) -> u8 {
+        self.local_player_id
+    }
+}
+
+impl Default for NetworkManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// =============================================================================
+// Global Network Manager (for C++ compatibility)
+// =============================================================================
+
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+static NETWORK_MANAGER: Lazy<Mutex<Option<NetworkManager>>> = Lazy::new(|| Mutex::new(None));
+
+fn with_manager<F, R>(f: F) -> NetworkResult<R>
+where
+    F: FnOnce(&mut NetworkManager) -> NetworkResult<R>,
+{
+    let mut guard = NETWORK_MANAGER.lock().unwrap();
+    match guard.as_mut() {
+        Some(manager) => f(manager),
+        None => Err(NetworkError::NotInitialized),
+    }
+}
+
+// =============================================================================
+// FFI Exports for Game Integration
+// =============================================================================
+
+/// Initialize the network manager
+#[no_mangle]
+pub extern "C" fn Platform_NetworkManager_Init() -> i32 {
+    let mut guard = NETWORK_MANAGER.lock().unwrap();
+    if guard.is_some() {
+        return -1; // Already initialized
+    }
+
+    *guard = Some(NetworkManager::new());
+    0
+}
+
+/// Shutdown the network manager
+#[no_mangle]
+pub extern "C" fn Platform_NetworkManager_Shutdown() {
+    let mut guard = NETWORK_MANAGER.lock().unwrap();
+    if let Some(mut manager) = guard.take() {
+        manager.disconnect();
+    }
+}
+
+/// Host a game
+#[no_mangle]
+pub unsafe extern "C" fn Platform_NetworkManager_HostGame(
+    game_name: *const i8,
+    port: u16,
+    max_players: i32,
+) -> i32 {
+    if game_name.is_null() {
+        return -1;
+    }
+
+    let name = match std::ffi::CStr::from_ptr(game_name).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    match with_manager(|m| m.host_game(name, port, max_players as usize)) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Join a game
+#[no_mangle]
+pub unsafe extern "C" fn Platform_NetworkManager_JoinGame(
+    address: *const i8,
+    port: u16,
+) -> i32 {
+    if address.is_null() {
+        return -1;
+    }
+
+    let addr = match std::ffi::CStr::from_ptr(address).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    match with_manager(|m| m.join_game(addr, port)) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Disconnect from current session
+#[no_mangle]
+pub extern "C" fn Platform_NetworkManager_Disconnect() {
+    let _ = with_manager(|m| {
+        m.disconnect();
+        Ok(())
+    });
+}
+
+/// Update network (call every frame)
+#[no_mangle]
+pub extern "C" fn Platform_NetworkManager_Update() -> i32 {
+    match with_manager(|m| m.update()) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Check if connected
+#[no_mangle]
+pub extern "C" fn Platform_NetworkManager_IsConnected() -> i32 {
+    match with_manager(|m| Ok(m.is_connected())) {
+        Ok(true) => 1,
+        _ => 0,
+    }
+}
+
+/// Check if host
+#[no_mangle]
+pub extern "C" fn Platform_NetworkManager_IsHost() -> i32 {
+    match with_manager(|m| Ok(m.is_host())) {
+        Ok(true) => 1,
+        _ => 0,
+    }
+}
+
+/// Send game data
+#[no_mangle]
+pub unsafe extern "C" fn Platform_NetworkManager_SendData(
+    data: *const u8,
+    size: i32,
+    reliable: i32,
+) -> i32 {
+    if data.is_null() || size <= 0 {
+        return -1;
+    }
+
+    let slice = std::slice::from_raw_parts(data, size as usize);
+
+    match with_manager(|m| m.send_game_data(slice, reliable != 0)) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+```
 
 ## Tasks Breakdown
 
 ### Phase 1: enet Integration (2 days)
-- [ ] Add enet to build system
-- [ ] Implement Platform_Network_* functions
-- [ ] Test basic connectivity
+- [ ] Add enet crate to Cargo.toml
+- [ ] Implement Platform_Network_* initialization functions
+- [ ] Test basic enet functionality
 
 ### Phase 2: Host/Join (2 days)
-- [ ] Implement host creation
-- [ ] Implement client connection
+- [ ] Implement PlatformHost
+- [ ] Implement PlatformClient
 - [ ] Test connection/disconnection
 
 ### Phase 3: Packet Transmission (2 days)
@@ -582,22 +1183,23 @@ Approach:
 - [ ] Map game packets to enet
 
 ### Phase 5: Integration (3 days)
-- [ ] Stub out IPX code
-- [ ] Integrate with game networking
-- [ ] Test multiplayer game
+- [ ] Stub out IPX code in compatibility header
+- [ ] Integrate NetworkManager with game code
+- [ ] Test multiplayer connectivity
 
 ### Phase 6: Testing (2 days)
 - [ ] LAN multiplayer testing
-- [ ] Internet multiplayer testing
+- [ ] Internet multiplayer testing (if applicable)
 - [ ] Stress testing
 
 ## Acceptance Criteria
 
 - [ ] Host can create game session
 - [ ] Client can join game session
-- [ ] Game commands synchronize
-- [ ] Multiplayer match playable
+- [ ] Game commands synchronize correctly
+- [ ] Multiplayer match is playable
 - [ ] No desync issues
+- [ ] Works on macOS (Intel and Apple Silicon)
 
 ## Estimated Duration
 **10-14 days**
@@ -605,7 +1207,7 @@ Approach:
 ## Dependencies
 - Plans 01-09 completed
 - Single-player working
-- enet library
+- enet crate (0.3+)
 
 ## Next Plan
 Once networking is functional, proceed to **Plan 11: Cleanup & Polish**

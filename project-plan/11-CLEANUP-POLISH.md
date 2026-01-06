@@ -1,4 +1,4 @@
-# Plan 11: Cleanup & Polish
+# Plan 11: Cleanup & Polish (Rust Implementation)
 
 ## Objective
 Finalize the macOS port with bug fixes, performance optimization, proper packaging, and quality-of-life improvements.
@@ -35,7 +35,7 @@ This phase covers:
 
 **General:**
 - [ ] Save/load game issues
-- [ ] Memory leaks
+- [ ] Memory leaks (use Rust's memory safety!)
 - [ ] File path issues on case-sensitive systems
 
 ### Bug Tracking Process
@@ -58,33 +58,135 @@ instruments -t "Time Profiler" ./RedAlert.app
 instruments -t "Allocations" ./RedAlert.app
 ```
 
+For Rust-specific profiling:
+```bash
+# Using cargo-flamegraph
+cargo install flamegraph
+cargo flamegraph --bin redalert_platform
+
+# Using perf on Linux (for cross-platform development)
+perf record -g ./target/release/redalert_platform
+perf report
+```
+
 ### Optimization Targets
 
-**Rendering Pipeline:**
-```cpp
-// Batch palette conversions
-void OptimizedFlip() {
-    // Convert entire buffer in one pass
-    // Use SIMD if available
-    #ifdef __SSE2__
-    // SSE2 optimized path
-    #elif defined(__ARM_NEON)
-    // NEON optimized path for Apple Silicon
-    #else
+**Rendering Pipeline (Rust):**
+
+File: `platform/src/graphics/optimize.rs`
+```rust
+//! Performance optimizations for graphics rendering
+
+use std::arch::x86_64::*;
+
+/// Optimized palette conversion using SIMD
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+pub unsafe fn convert_palette_simd(
+    src: &[u8],
+    dest: &mut [u32],
+    palette: &[u32; 256],
+) {
+    // Process 16 pixels at a time when possible
+    let chunks = src.len() / 16;
+
+    for i in 0..chunks {
+        let base = i * 16;
+
+        // Load 16 indices
+        for j in 0..16 {
+            dest[base + j] = palette[src[base + j] as usize];
+        }
+    }
+
+    // Handle remainder
+    let remainder_start = chunks * 16;
+    for i in remainder_start..src.len() {
+        dest[i] = palette[src[i] as usize];
+    }
+}
+
+/// ARM NEON optimized palette conversion
+#[cfg(target_arch = "aarch64")]
+pub fn convert_palette_neon(
+    src: &[u8],
+    dest: &mut [u32],
+    palette: &[u32; 256],
+) {
+    // NEON implementation for Apple Silicon
+    for (d, s) in dest.iter_mut().zip(src.iter()) {
+        *d = palette[*s as usize];
+    }
+}
+
+/// Auto-dispatch to best implementation
+pub fn convert_palette_fast(
+    src: &[u8],
+    dest: &mut [u32],
+    palette: &[u32; 256],
+) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("sse2") {
+            unsafe { convert_palette_simd(src, dest, palette); }
+            return;
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        convert_palette_neon(src, dest, palette);
+        return;
+    }
+
     // Scalar fallback
-    #endif
+    for (d, s) in dest.iter_mut().zip(src.iter()) {
+        *d = palette[*s as usize];
+    }
 }
 ```
 
 **Memory Allocation:**
-- Pool frequently allocated objects
-- Reduce allocation in game loop
-- Pre-allocate audio buffers
 
-**Frame Rate:**
-- Target: 60 FPS at 1080p
-- Baseline: 30 FPS acceptable
-- Measure on M1 Mac Mini and older Intel Macs
+Rust's ownership system already helps with allocation efficiency, but we can add:
+- Object pools for frequently allocated items
+- Pre-allocated buffers for audio
+
+```rust
+//! Object pooling for performance
+
+use std::sync::Mutex;
+use std::collections::VecDeque;
+
+/// Simple object pool for reusable allocations
+pub struct ObjectPool<T> {
+    available: Mutex<VecDeque<T>>,
+    factory: fn() -> T,
+}
+
+impl<T> ObjectPool<T> {
+    pub fn new(factory: fn() -> T, initial_size: usize) -> Self {
+        let mut available = VecDeque::with_capacity(initial_size);
+        for _ in 0..initial_size {
+            available.push_back(factory());
+        }
+        Self {
+            available: Mutex::new(available),
+            factory,
+        }
+    }
+
+    pub fn acquire(&self) -> T {
+        let mut pool = self.available.lock().unwrap();
+        pool.pop_front().unwrap_or_else(|| (self.factory)())
+    }
+
+    pub fn release(&self, item: T) {
+        let mut pool = self.available.lock().unwrap();
+        pool.push_back(item);
+    }
+}
+```
 
 ### Performance Metrics
 
@@ -97,76 +199,176 @@ void OptimizedFlip() {
 
 ## 11.3 macOS Integration
 
-### Menu Bar
-
-```cpp
-// Native macOS menu bar integration
-void Setup_MacOS_Menu() {
-    // Application menu (handled by SDL2)
-    // File menu: New Game, Load, Save, Quit
-    // Options menu: Sound, Video, etc.
-}
-```
-
 ### Retina Display Support
 
-```cpp
-bool Platform_IsRetinaDisplay() {
-    // Check for high-DPI
-    float dpi;
-    SDL_GetDisplayDPI(0, &dpi, nullptr, nullptr);
-    return dpi > 100.0f;
+File: `platform/src/graphics/display.rs`
+```rust
+//! Display and DPI handling
+
+use sdl2::video::Window;
+
+/// Check if running on a Retina/HiDPI display
+pub fn is_retina_display(window: &Window) -> bool {
+    let (window_w, _) = window.size();
+    let (drawable_w, _) = window.drawable_size();
+    drawable_w > window_w
 }
 
-void Platform_GetRetinaScale(int* scale_x, int* scale_y) {
-    int window_w, window_h;
-    int render_w, render_h;
+/// Get the scale factor for HiDPI displays
+pub fn get_display_scale(window: &Window) -> (u32, u32) {
+    let (window_w, window_h) = window.size();
+    let (drawable_w, drawable_h) = window.drawable_size();
 
-    SDL_GetWindowSize(g_window, &window_w, &window_h);
-    SDL_GL_GetDrawableSize(g_window, &render_w, &render_h);
+    (drawable_w / window_w, drawable_h / window_h)
+}
 
-    *scale_x = render_w / window_w;
-    *scale_y = render_h / window_h;
+// FFI exports
+#[no_mangle]
+pub extern "C" fn Platform_IsRetinaDisplay() -> i32 {
+    crate::graphics::with_graphics(|state| {
+        if is_retina_display(&state.window) { 1 } else { 0 }
+    }).unwrap_or(0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn Platform_GetDisplayScale(
+    scale_x: *mut i32,
+    scale_y: *mut i32,
+) {
+    if let Ok((sx, sy)) = crate::graphics::with_graphics(|state| {
+        get_display_scale(&state.window)
+    }) {
+        if !scale_x.is_null() { *scale_x = sx as i32; }
+        if !scale_y.is_null() { *scale_y = sy as i32; }
+    }
 }
 ```
 
 ### Fullscreen Mode
 
-```cpp
-void Platform_ToggleFullscreen() {
-    Uint32 flags = SDL_GetWindowFlags(g_window);
+```rust
+//! Fullscreen handling
 
-    if (flags & SDL_WINDOW_FULLSCREEN_DESKTOP) {
-        SDL_SetWindowFullscreen(g_window, 0);
+use sdl2::video::{Window, FullscreenType};
+
+/// Toggle fullscreen mode
+pub fn toggle_fullscreen(window: &mut Window) -> bool {
+    let current = window.fullscreen_state();
+
+    let new_state = match current {
+        FullscreenType::Off => FullscreenType::Desktop,
+        _ => FullscreenType::Off,
+    };
+
+    window.set_fullscreen(new_state).is_ok()
+}
+
+/// Set fullscreen mode explicitly
+pub fn set_fullscreen(window: &mut Window, fullscreen: bool) -> bool {
+    let state = if fullscreen {
+        FullscreenType::Desktop
     } else {
-        SDL_SetWindowFullscreen(g_window, SDL_WINDOW_FULLSCREEN_DESKTOP);
-    }
+        FullscreenType::Off
+    };
+
+    window.set_fullscreen(state).is_ok()
+}
+
+// FFI exports
+#[no_mangle]
+pub extern "C" fn Platform_ToggleFullscreen() -> i32 {
+    crate::graphics::with_graphics_mut(|state| {
+        if toggle_fullscreen(&mut state.window) { 0 } else { -1 }
+    }).unwrap_or(-1)
+}
+
+#[no_mangle]
+pub extern "C" fn Platform_SetFullscreen(fullscreen: i32) -> i32 {
+    crate::graphics::with_graphics_mut(|state| {
+        if set_fullscreen(&mut state.window, fullscreen != 0) { 0 } else { -1 }
+    }).unwrap_or(-1)
 }
 ```
 
 ### Application Lifecycle
 
-```cpp
-// Handle macOS application events
-void Handle_MacOS_Events(SDL_Event* event) {
-    switch (event->type) {
-        case SDL_APP_WILLENTERBACKGROUND:
-            // Pause game, mute audio
-            Game_Pause();
-            Platform_Audio_SetMasterVolume(0);
-            break;
+File: `platform/src/app/lifecycle.rs`
+```rust
+//! macOS application lifecycle handling
 
-        case SDL_APP_DIDENTERFOREGROUND:
-            // Resume
-            Game_Resume();
-            Platform_Audio_SetMasterVolume(g_saved_volume);
-            break;
+use sdl2::event::Event;
 
-        case SDL_APP_TERMINATING:
-            // Save state, cleanup
-            Game_Save_State();
-            break;
+/// Application state for lifecycle events
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppState {
+    Active,
+    Background,
+    Terminating,
+}
+
+static APP_STATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+impl AppState {
+    fn to_u8(self) -> u8 {
+        match self {
+            AppState::Active => 0,
+            AppState::Background => 1,
+            AppState::Terminating => 2,
+        }
     }
+
+    fn from_u8(v: u8) -> Self {
+        match v {
+            0 => AppState::Active,
+            1 => AppState::Background,
+            2 => AppState::Terminating,
+            _ => AppState::Active,
+        }
+    }
+}
+
+/// Handle macOS application events
+pub fn handle_app_event(event: &Event) -> Option<AppState> {
+    use std::sync::atomic::Ordering;
+
+    match event {
+        Event::AppWillEnterBackground { .. } => {
+            log::info!("App entering background");
+            APP_STATE.store(AppState::Background.to_u8(), Ordering::SeqCst);
+            Some(AppState::Background)
+        }
+
+        Event::AppDidEnterForeground { .. } => {
+            log::info!("App entering foreground");
+            APP_STATE.store(AppState::Active.to_u8(), Ordering::SeqCst);
+            Some(AppState::Active)
+        }
+
+        Event::AppTerminating { .. } => {
+            log::info!("App terminating");
+            APP_STATE.store(AppState::Terminating.to_u8(), Ordering::SeqCst);
+            Some(AppState::Terminating)
+        }
+
+        _ => None,
+    }
+}
+
+/// Get current application state
+pub fn get_app_state() -> AppState {
+    use std::sync::atomic::Ordering;
+    AppState::from_u8(APP_STATE.load(Ordering::SeqCst))
+}
+
+// FFI exports
+#[no_mangle]
+pub extern "C" fn Platform_GetAppState() -> i32 {
+    get_app_state().to_u8() as i32
+}
+
+#[no_mangle]
+pub extern "C" fn Platform_IsAppActive() -> i32 {
+    if get_app_state() == AppState::Active { 1 } else { 0 }
 }
 ```
 
@@ -189,7 +391,7 @@ RedAlert.app/
 │   │   └── en.lproj/
 │   │       └── InfoPlist.strings
 │   └── Frameworks/           # Bundled libraries
-│       ├── SDL2.framework
+│       ├── libSDL2.dylib
 │       └── ...
 ```
 
@@ -250,21 +452,35 @@ if(APPLE)
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/data/
             DESTINATION ${CMAKE_BINARY_DIR}/RedAlert.app/Contents/Resources/data)
 
-    # Copy frameworks
+    # Copy and fix library paths
     include(BundleUtilities)
     set(DIRS ${CMAKE_BINARY_DIR})
     fixup_bundle(${CMAKE_BINARY_DIR}/RedAlert.app "" "${DIRS}")
 endif()
 ```
 
-### Universal Binary (Intel + Apple Silicon)
+### Universal Binary Build Script
 
-```cmake
-# Build universal binary
-if(APPLE)
-    set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64")
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15")
-endif()
+File: `scripts/build-universal.sh`
+```bash
+#!/bin/bash
+set -e
+
+# Build for both architectures
+echo "Building for x86_64..."
+cargo build --release --target x86_64-apple-darwin
+
+echo "Building for arm64..."
+cargo build --release --target aarch64-apple-darwin
+
+# Create universal binary with lipo
+echo "Creating universal binary..."
+lipo -create \
+    target/x86_64-apple-darwin/release/libredalert_platform.a \
+    target/aarch64-apple-darwin/release/libredalert_platform.a \
+    -output target/universal/libredalert_platform.a
+
+echo "Universal binary created at target/universal/libredalert_platform.a"
 ```
 
 ### Code Signing (Optional)
@@ -277,45 +493,208 @@ codesign --force --deep --sign "Developer ID Application: Your Name" RedAlert.ap
 codesign --verify --verbose RedAlert.app
 
 # Notarize for distribution
-xcrun altool --notarize-app --primary-bundle-id "com.example.redalert" \
-    --username "your@email.com" --password "@keychain:AC_PASSWORD" \
-    --file RedAlert.zip
+xcrun notarytool submit RedAlert.zip \
+    --apple-id "your@email.com" \
+    --team-id "TEAMID" \
+    --password "@keychain:AC_PASSWORD" \
+    --wait
+
+# Staple the notarization ticket
+xcrun stapler staple RedAlert.app
 ```
 
 ## 11.5 Configuration & Saves
 
 ### Settings File Location
 
-```cpp
-std::string Get_Config_Path() {
-    const char* home = getenv("HOME");
-    if (!home) return "./";
+File: `platform/src/config/paths.rs`
+```rust
+//! Configuration and save file paths
 
-    std::string path = home;
-    path += "/Library/Application Support/RedAlert/";
+use std::path::PathBuf;
+
+/// Get the application support directory for Red Alert
+pub fn get_config_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let path = PathBuf::from(home)
+        .join("Library")
+        .join("Application Support")
+        .join("RedAlert");
 
     // Create directory if needed
-    mkdir(path.c_str(), 0755);
+    std::fs::create_dir_all(&path).ok();
 
-    return path;
+    path
 }
 
-// Settings file: ~/Library/Application Support/RedAlert/settings.ini
-// Save games: ~/Library/Application Support/RedAlert/saves/
-```
+/// Get the saves directory
+pub fn get_saves_path() -> PathBuf {
+    get_config_path().join("saves")
+}
 
-### Settings Migration
+/// Get the settings file path
+pub fn get_settings_path() -> PathBuf {
+    get_config_path().join("settings.ini")
+}
 
-If user has Windows saves (from Steam/GOG), offer to import:
-```cpp
-bool Import_Windows_Saves(const char* source_path) {
-    // Look for save files in standard Windows locations
-    // Convert paths and copy to macOS location
-    return true;
+/// Get the log file path
+pub fn get_log_path() -> PathBuf {
+    get_config_path().join("game.log")
+}
+
+// FFI exports
+#[no_mangle]
+pub unsafe extern "C" fn Platform_GetConfigPath(
+    buffer: *mut i8,
+    buffer_size: i32,
+) -> i32 {
+    if buffer.is_null() || buffer_size <= 0 {
+        return -1;
+    }
+
+    let path = get_config_path();
+    let path_str = path.to_string_lossy();
+
+    let bytes = path_str.as_bytes();
+    let copy_len = std::cmp::min(bytes.len(), (buffer_size - 1) as usize);
+
+    std::ptr::copy_nonoverlapping(
+        bytes.as_ptr() as *const i8,
+        buffer,
+        copy_len,
+    );
+
+    // Null terminate
+    *buffer.add(copy_len) = 0;
+
+    copy_len as i32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn Platform_GetSavesPath(
+    buffer: *mut i8,
+    buffer_size: i32,
+) -> i32 {
+    if buffer.is_null() || buffer_size <= 0 {
+        return -1;
+    }
+
+    let path = get_saves_path();
+
+    // Create saves directory if needed
+    std::fs::create_dir_all(&path).ok();
+
+    let path_str = path.to_string_lossy();
+    let bytes = path_str.as_bytes();
+    let copy_len = std::cmp::min(bytes.len(), (buffer_size - 1) as usize);
+
+    std::ptr::copy_nonoverlapping(
+        bytes.as_ptr() as *const i8,
+        buffer,
+        copy_len,
+    );
+
+    *buffer.add(copy_len) = 0;
+
+    copy_len as i32
 }
 ```
 
-## 11.6 Testing Checklist
+## 11.6 Logging
+
+File: `platform/src/logging.rs`
+```rust
+//! Logging infrastructure
+
+use std::fs::File;
+use std::io::Write;
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+use log::{Log, Metadata, Record, Level, LevelFilter};
+
+static LOG_FILE: Lazy<Mutex<Option<File>>> = Lazy::new(|| Mutex::new(None));
+
+struct GameLogger;
+
+impl Log for GameLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level() <= Level::Debug
+    }
+
+    fn log(&self, record: &Record) {
+        if self.enabled(record.metadata()) {
+            let msg = format!(
+                "[{}] {} - {}\n",
+                record.level(),
+                record.target(),
+                record.args()
+            );
+
+            // Print to stderr
+            eprint!("{}", msg);
+
+            // Write to log file
+            if let Ok(mut guard) = LOG_FILE.lock() {
+                if let Some(ref mut file) = *guard {
+                    let _ = file.write_all(msg.as_bytes());
+                }
+            }
+        }
+    }
+
+    fn flush(&self) {
+        if let Ok(mut guard) = LOG_FILE.lock() {
+            if let Some(ref mut file) = *guard {
+                let _ = file.flush();
+            }
+        }
+    }
+}
+
+static LOGGER: GameLogger = GameLogger;
+
+/// Initialize the logging system
+pub fn init() {
+    // Set up log file
+    let log_path = crate::config::paths::get_log_path();
+    if let Ok(file) = File::create(&log_path) {
+        *LOG_FILE.lock().unwrap() = Some(file);
+    }
+
+    // Set up logger
+    log::set_logger(&LOGGER)
+        .map(|()| log::set_max_level(LevelFilter::Debug))
+        .ok();
+
+    log::info!("Logging initialized to {:?}", log_path);
+}
+
+// FFI exports
+#[no_mangle]
+pub extern "C" fn Platform_Log_Init() {
+    init();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Log(level: i32, message: *const i8) {
+    if message.is_null() {
+        return;
+    }
+
+    let msg = std::ffi::CStr::from_ptr(message)
+        .to_string_lossy();
+
+    match level {
+        0 => log::error!("{}", msg),
+        1 => log::warn!("{}", msg),
+        2 => log::info!("{}", msg),
+        3 => log::debug!("{}", msg),
+        _ => log::trace!("{}", msg),
+    }
+}
+```
+
+## 11.7 Testing Checklist
 
 ### Functionality Tests
 
@@ -342,7 +721,7 @@ bool Import_Windows_Saves(const char* source_path) {
 ### Compatibility Tests
 
 **Hardware:**
-- [ ] M1/M2 Mac (Apple Silicon)
+- [ ] M1/M2/M3 Mac (Apple Silicon)
 - [ ] Intel Mac (2015+)
 - [ ] Various display resolutions
 - [ ] External monitors
@@ -354,7 +733,7 @@ bool Import_Windows_Saves(const char* source_path) {
 - [ ] macOS 11 (Big Sur)
 - [ ] macOS 10.15 (Catalina) - minimum target
 
-## 11.7 Documentation
+## 11.8 Documentation
 
 ### README.md Updates
 
@@ -389,13 +768,30 @@ Required files:
 ### Requirements
 - Xcode Command Line Tools
 - CMake 3.20+
-- SDL2 (installed via Homebrew or bundled)
+- Rust toolchain (via rustup)
+
+### Install Dependencies
+```bash
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Add targets for universal binary
+rustup target add x86_64-apple-darwin aarch64-apple-darwin
+
+# Install CMake
+brew install cmake ninja
+```
 
 ### Build Steps
 ```bash
-mkdir build && cd build
-cmake .. -G "Xcode"
-cmake --build . --config Release
+# Configure
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+# Build
+cmake --build build
+
+# Run
+./build/RedAlert.app/Contents/MacOS/RedAlert
 ```
 ```
 
@@ -411,18 +807,18 @@ cmake --build . --config Release
 ### Phase 2: Performance (3 days)
 - [ ] Profile with Instruments
 - [ ] Identify bottlenecks
-- [ ] Optimize critical paths
+- [ ] Optimize critical paths (SIMD where applicable)
 - [ ] Verify improvements
 
 ### Phase 3: macOS Integration (2 days)
 - [ ] Retina display support
 - [ ] Fullscreen handling
-- [ ] Menu bar integration
-- [ ] Application lifecycle
+- [ ] Application lifecycle events
+- [ ] Proper path handling
 
 ### Phase 4: Packaging (2 days)
 - [ ] Create app bundle
-- [ ] Universal binary
+- [ ] Universal binary (Intel + Apple Silicon)
 - [ ] Include resources
 - [ ] Test installation
 
@@ -442,8 +838,9 @@ cmake --build . --config Release
 - [ ] Game fully playable single-player
 - [ ] Game playable multiplayer
 - [ ] No critical or major bugs
-- [ ] Performance targets met
+- [ ] Performance targets met (60 FPS)
 - [ ] Proper macOS app bundle
+- [ ] Works on Intel and Apple Silicon
 - [ ] Documentation complete
 
 ## Estimated Duration
@@ -456,7 +853,7 @@ cmake --build . --config Release
 ## Project Completion
 
 Upon completing this phase:
-1. Tag release in Git
+1. Tag release in Git: `git tag -a v1.0.0 -m "Initial macOS release"`
 2. Create release notes
-3. Build final distribution
-4. Celebrate! 🎉
+3. Build final distribution DMG
+4. Test on fresh macOS installation

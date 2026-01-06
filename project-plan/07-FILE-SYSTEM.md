@@ -1,7 +1,7 @@
-# Plan 07: File System
+# Plan 07: File System (Rust std::fs)
 
 ## Objective
-Replace Windows file I/O with POSIX file operations and implement proper path handling for macOS, including support for the MIX archive format.
+Replace Windows file I/O with Rust's std::fs and std::path, implementing proper path handling for macOS including case-insensitive file lookup and MIX archive support.
 
 ## Current State Analysis
 
@@ -12,639 +12,752 @@ Replace Windows file I/O with POSIX file operations and implement proper path ha
 - `CODE/CCFILE.CPP`, `CODE/CCFILE.H`
 - `CODE/CDFILE.CPP`, `CODE/CDFILE.H`
 - `CODE/MIXFILE.CPP`, `CODE/MIXFILE.H`
-- `WWFLAT32/FILE/` directory
 
-**Windows APIs Used:**
-```cpp
-// File operations
-CreateFile(path, access, share, security, creation, flags, template);
-ReadFile(handle, buffer, size, &bytes_read, overlapped);
-WriteFile(handle, buffer, size, &bytes_written, overlapped);
-CloseHandle(handle);
-SetFilePointer(handle, distance, high, method);
-GetFileSize(handle, high);
-
-// File attributes
-GetFileAttributes(path);
-SetFileAttributes(path, attributes);
-
-// Directory enumeration
-FindFirstFile(pattern, &find_data);
-FindNextFile(handle, &find_data);
-FindClose(handle);
-```
-
-**File Classes:**
-```cpp
-class RawFileClass {
-    HANDLE Handle;
-    char* Filename;
-    int Rights;  // Read/Write
-
-    virtual int Open(int rights);
-    virtual void Close();
-    virtual int Read(void* buffer, int size);
-    virtual int Write(void* buffer, int size);
-    virtual int Seek(int pos, int whence);
-    virtual int Size();
-};
-
-class BufferIOFileClass : public RawFileClass {
-    // Adds buffered I/O
-};
-
-class CCFileClass : public BufferIOFileClass {
-    // Adds MIX file support
-};
-```
-
-**Path Issues:**
+**Key Issues:**
 - Backslash path separators: `DATA\CONQUER.MIX`
 - Drive letters: `D:\GAMES\RA\`
-- Case-insensitive filenames (DOS/Windows)
-- CD-ROM detection and paths
+- Case-insensitive filenames (Windows)
 
-## Implementation Strategy
+## Rust Implementation
 
-### 7.1 POSIX File Implementation
+### 7.1 Path Utilities
 
-File: `src/platform/file_posix.cpp`
-```cpp
-#include "platform/platform_file.h"
-#include <cstdio>
-#include <cstring>
-#include <sys/stat.h>
-#include <dirent.h>
-#include <unistd.h>
-#include <algorithm>
-#include <string>
+File: `platform/src/files/path.rs`
+```rust
+//! Path normalization and utilities
 
-namespace {
+use std::path::{Path, PathBuf};
+use std::fs;
 
-std::string g_base_path;
-std::string g_pref_path;
+/// Normalize a Windows-style path for Unix
+pub fn normalize(path: &str) -> String {
+    let mut result = path.to_string();
 
-// Case-insensitive file finder
-std::string Find_Case_Insensitive(const std::string& dir, const std::string& filename) {
-    DIR* d = opendir(dir.c_str());
-    if (!d) return "";
+    // Convert backslashes to forward slashes
+    result = result.replace('\\', "/");
 
-    std::string lower_name = filename;
-    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+    // Remove drive letter if present (e.g., "C:")
+    if result.len() >= 2 && result.chars().nth(1) == Some(':') {
+        result = result[2..].to_string();
+    }
 
-    struct dirent* entry;
-    while ((entry = readdir(d)) != nullptr) {
-        std::string entry_lower = entry->d_name;
-        std::transform(entry_lower.begin(), entry_lower.end(), entry_lower.begin(), ::tolower);
+    // Remove leading slash if path should be relative
+    if result.starts_with('/') && !result.starts_with("//") {
+        result = result[1..].to_string();
+    }
 
-        if (entry_lower == lower_name) {
-            closedir(d);
-            return std::string(entry->d_name);
+    result
+}
+
+/// Find a file with case-insensitive matching
+pub fn find_case_insensitive(dir: &Path, filename: &str) -> Option<PathBuf> {
+    let lower_name = filename.to_lowercase();
+
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let entry_name = entry.file_name().to_string_lossy().to_string();
+            if entry_name.to_lowercase() == lower_name {
+                return Some(entry.path());
+            }
         }
     }
 
-    closedir(d);
-    return "";
+    None
 }
 
-} // anonymous namespace
+/// Search for a file, handling case-insensitivity and path normalization
+pub fn find_file(path: &str) -> Option<PathBuf> {
+    let normalized = normalize(path);
+    let path = Path::new(&normalized);
 
-//=============================================================================
-// Path Utilities
-//=============================================================================
-
-void Platform_File_Init(const char* org_name, const char* app_name) {
-    // Get executable path
-    char path[1024];
-    uint32_t size = sizeof(path);
-
-    #ifdef PLATFORM_MACOS
-    // macOS-specific: get bundle path
-    // For command-line app, use current directory
-    if (getcwd(path, sizeof(path))) {
-        g_base_path = path;
-        g_base_path += "/";
-    }
-    #endif
-
-    // Preferences path (for saves, config)
-    const char* home = getenv("HOME");
-    if (home) {
-        g_pref_path = home;
-        g_pref_path += "/Library/Application Support/";
-        g_pref_path += app_name;
-        g_pref_path += "/";
-
-        // Create directory if it doesn't exist
-        mkdir(g_pref_path.c_str(), 0755);
-    }
-}
-
-const char* Platform_GetBasePath(void) {
-    return g_base_path.c_str();
-}
-
-const char* Platform_GetPrefPath(void) {
-    return g_pref_path.c_str();
-}
-
-const char* Platform_GetSeparator(void) {
-    return "/";
-}
-
-void Platform_NormalizePath(char* path) {
-    if (!path) return;
-
-    // Convert backslashes to forward slashes
-    for (char* p = path; *p; p++) {
-        if (*p == '\\') *p = '/';
+    // First, try the exact path
+    if path.exists() {
+        return Some(path.to_path_buf());
     }
 
-    // Remove drive letter if present (e.g., "C:")
-    if (path[0] && path[1] == ':') {
-        memmove(path, path + 2, strlen(path + 2) + 1);
+    // Try case-insensitive search
+    if let Some(parent) = path.parent() {
+        if let Some(filename) = path.file_name() {
+            if let Some(found) = find_case_insensitive(parent, &filename.to_string_lossy()) {
+                return Some(found);
+            }
+        }
     }
 
-    // Remove leading slash if path is relative
-    // (Windows paths like \DATA become /DATA, we want DATA)
-    if (path[0] == '/' && path[1] != '/') {
-        memmove(path, path + 1, strlen(path));
+    // Try common data directories
+    let data_dirs = ["data", "DATA", "Data"];
+    for dir in &data_dirs {
+        let try_path = PathBuf::from(dir).join(&normalized);
+        if try_path.exists() {
+            return Some(try_path);
+        }
     }
+
+    None
 }
 
-bool Platform_PathExists(const char* path) {
-    struct stat st;
-    return stat(path, &st) == 0;
+/// Get the path separator for the current platform
+pub fn separator() -> char {
+    std::path::MAIN_SEPARATOR
 }
 
-bool Platform_IsDirectory(const char* path) {
-    struct stat st;
-    if (stat(path, &st) != 0) return false;
-    return S_ISDIR(st.st_mode);
+/// Join path components
+pub fn join(base: &str, path: &str) -> String {
+    let base = Path::new(base);
+    let joined = base.join(normalize(path));
+    joined.to_string_lossy().to_string()
 }
 
-bool Platform_CreateDirectory(const char* path) {
-    return mkdir(path, 0755) == 0;
+/// Get the directory containing a path
+pub fn dirname(path: &str) -> String {
+    let path = Path::new(path);
+    path.parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| ".".to_string())
+}
+
+/// Get the filename from a path
+pub fn basename(path: &str) -> String {
+    let path = Path::new(path);
+    path.file_name()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// Get the file extension
+pub fn extension(path: &str) -> String {
+    let path = Path::new(path);
+    path.extension()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
 }
 ```
 
 ### 7.2 File Operations
 
-```cpp
-//=============================================================================
-// File Handle
-//=============================================================================
+File: `platform/src/files/mod.rs`
+```rust
+//! File system abstraction
 
-struct PlatformFile {
-    FILE* handle;
-    std::string path;
-    FileMode mode;
-    int64_t size;
-};
+pub mod path;
 
-PlatformFile* Platform_File_Open(const char* path, FileMode mode) {
-    // Normalize path
-    std::string normalized = path;
-    for (char& c : normalized) {
-        if (c == '\\') c = '/';
+use crate::error::PlatformError;
+use crate::PlatformResult;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write, Seek, SeekFrom, BufReader, BufWriter};
+use std::path::PathBuf;
+use once_cell::sync::Lazy;
+use std::sync::Mutex;
+
+/// File open mode
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub enum FileMode {
+    Read = 1,
+    Write = 2,
+    ReadWrite = 3,
+    Append = 4,
+}
+
+/// Seek origin
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub enum SeekOrigin {
+    Start = 0,
+    Current = 1,
+    End = 2,
+}
+
+/// Global paths
+static PATHS: Lazy<Mutex<Paths>> = Lazy::new(|| Mutex::new(Paths::default()));
+
+#[derive(Default)]
+struct Paths {
+    base_path: String,
+    pref_path: String,
+}
+
+/// File handle
+pub struct PlatformFile {
+    file: File,
+    path: PathBuf,
+    mode: FileMode,
+    size: i64,
+}
+
+impl PlatformFile {
+    /// Open a file
+    pub fn open(filename: &str, mode: FileMode) -> PlatformResult<Self> {
+        let normalized = path::normalize(filename);
+
+        // For reading, try to find the file (case-insensitive)
+        let file_path = if matches!(mode, FileMode::Read | FileMode::ReadWrite) {
+            path::find_file(&normalized)
+                .ok_or_else(|| PlatformError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("File not found: {}", filename)
+                )))?
+        } else {
+            PathBuf::from(&normalized)
+        };
+
+        let file = match mode {
+            FileMode::Read => File::open(&file_path)?,
+            FileMode::Write => File::create(&file_path)?,
+            FileMode::ReadWrite => OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&file_path)?,
+            FileMode::Append => OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&file_path)?,
+        };
+
+        let size = file.metadata().map(|m| m.len() as i64).unwrap_or(0);
+
+        Ok(Self {
+            file,
+            path: file_path,
+            mode,
+            size,
+        })
     }
 
-    // Determine fopen mode
-    const char* fmode;
-    if (mode == FILE_READ) {
-        fmode = "rb";
-    } else if (mode == FILE_WRITE) {
-        fmode = "wb";
-    } else if (mode == FILE_APPEND) {
-        fmode = "ab";
-    } else if (mode == (FILE_READ | FILE_WRITE)) {
-        fmode = "r+b";
+    /// Read bytes from file
+    pub fn read(&mut self, buffer: &mut [u8]) -> PlatformResult<usize> {
+        Ok(self.file.read(buffer)?)
+    }
+
+    /// Write bytes to file
+    pub fn write(&mut self, buffer: &[u8]) -> PlatformResult<usize> {
+        Ok(self.file.write(buffer)?)
+    }
+
+    /// Seek to position
+    pub fn seek(&mut self, offset: i64, origin: SeekOrigin) -> PlatformResult<u64> {
+        let pos = match origin {
+            SeekOrigin::Start => SeekFrom::Start(offset as u64),
+            SeekOrigin::Current => SeekFrom::Current(offset),
+            SeekOrigin::End => SeekFrom::End(offset),
+        };
+        Ok(self.file.seek(pos)?)
+    }
+
+    /// Get current position
+    pub fn tell(&mut self) -> PlatformResult<u64> {
+        Ok(self.file.stream_position()?)
+    }
+
+    /// Get file size
+    pub fn size(&self) -> i64 {
+        self.size
+    }
+
+    /// Check if at end of file
+    pub fn eof(&mut self) -> bool {
+        if let Ok(pos) = self.tell() {
+            pos >= self.size as u64
+        } else {
+            true
+        }
+    }
+
+    /// Flush buffers
+    pub fn flush(&mut self) -> PlatformResult<()> {
+        Ok(self.file.flush()?)
+    }
+}
+
+/// Directory entry
+#[repr(C)]
+pub struct DirEntry {
+    pub name: [u8; 260],
+    pub is_directory: bool,
+    pub size: i64,
+}
+
+/// Directory iterator handle
+pub struct PlatformDir {
+    iter: fs::ReadDir,
+    path: PathBuf,
+}
+
+impl PlatformDir {
+    pub fn open(path: &str) -> PlatformResult<Self> {
+        let normalized = path::normalize(path);
+        let iter = fs::read_dir(&normalized)?;
+        Ok(Self {
+            iter,
+            path: PathBuf::from(normalized),
+        })
+    }
+
+    pub fn read(&mut self) -> Option<DirEntry> {
+        loop {
+            let entry = self.iter.next()?.ok()?;
+            let filename = entry.file_name();
+            let name_str = filename.to_string_lossy();
+
+            // Skip . and ..
+            if name_str == "." || name_str == ".." {
+                continue;
+            }
+
+            let mut name = [0u8; 260];
+            let bytes = name_str.as_bytes();
+            let len = bytes.len().min(259);
+            name[..len].copy_from_slice(&bytes[..len]);
+
+            let metadata = entry.metadata().ok();
+            let is_directory = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+            let size = metadata.as_ref().map(|m| m.len() as i64).unwrap_or(0);
+
+            return Some(DirEntry {
+                name,
+                is_directory,
+                size,
+            });
+        }
+    }
+}
+
+// =============================================================================
+// Path Configuration
+// =============================================================================
+
+/// Initialize file system with paths
+pub fn init(org_name: &str, app_name: &str) {
+    if let Ok(mut paths) = PATHS.lock() {
+        // Base path (executable directory or current directory)
+        paths.base_path = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_string_lossy().to_string()))
+            .unwrap_or_else(|| ".".to_string());
+
+        // Preferences path (~/Library/Application Support/AppName)
+        if let Some(home) = dirs::home_dir() {
+            let pref_dir = home
+                .join("Library")
+                .join("Application Support")
+                .join(app_name);
+
+            // Create if doesn't exist
+            let _ = fs::create_dir_all(&pref_dir);
+
+            paths.pref_path = pref_dir.to_string_lossy().to_string();
+        }
+
+        log::info!("File system initialized");
+        log::info!("  Base path: {}", paths.base_path);
+        log::info!("  Pref path: {}", paths.pref_path);
+    }
+}
+
+/// Get base path
+pub fn get_base_path() -> String {
+    PATHS.lock()
+        .map(|p| p.base_path.clone())
+        .unwrap_or_else(|_| ".".to_string())
+}
+
+/// Get preferences path
+pub fn get_pref_path() -> String {
+    PATHS.lock()
+        .map(|p| p.pref_path.clone())
+        .unwrap_or_else(|_| ".".to_string())
+}
+
+// =============================================================================
+// Utility Functions
+// =============================================================================
+
+/// Check if a file exists
+pub fn exists(path: &str) -> bool {
+    path::find_file(path).is_some()
+}
+
+/// Check if path is a directory
+pub fn is_directory(path: &str) -> bool {
+    let normalized = path::normalize(path);
+    PathBuf::from(&normalized).is_dir()
+}
+
+/// Create a directory
+pub fn create_directory(path: &str) -> PlatformResult<()> {
+    let normalized = path::normalize(path);
+    fs::create_dir_all(&normalized)?;
+    Ok(())
+}
+
+/// Delete a file
+pub fn delete_file(path: &str) -> PlatformResult<()> {
+    if let Some(file_path) = path::find_file(path) {
+        fs::remove_file(file_path)?;
+    }
+    Ok(())
+}
+
+/// Delete a directory
+pub fn delete_directory(path: &str) -> PlatformResult<()> {
+    let normalized = path::normalize(path);
+    fs::remove_dir_all(&normalized)?;
+    Ok(())
+}
+
+/// Copy a file
+pub fn copy_file(src: &str, dst: &str) -> PlatformResult<u64> {
+    let src_path = path::find_file(src)
+        .ok_or_else(|| PlatformError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Source file not found: {}", src)
+        )))?;
+    let dst_path = PathBuf::from(path::normalize(dst));
+    Ok(fs::copy(src_path, dst_path)?)
+}
+
+/// Get file size without opening
+pub fn get_file_size(path: &str) -> PlatformResult<i64> {
+    if let Some(file_path) = path::find_file(path) {
+        let meta = fs::metadata(file_path)?;
+        Ok(meta.len() as i64)
     } else {
-        return nullptr;
+        Err(PlatformError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("File not found: {}", path)
+        )))
     }
-
-    // Try to open file
-    FILE* handle = fopen(normalized.c_str(), fmode);
-
-    // If read failed, try case-insensitive search
-    if (!handle && (mode & FILE_READ)) {
-        // Split into directory and filename
-        size_t last_sep = normalized.rfind('/');
-        std::string dir = (last_sep != std::string::npos)
-                          ? normalized.substr(0, last_sep)
-                          : ".";
-        std::string filename = (last_sep != std::string::npos)
-                               ? normalized.substr(last_sep + 1)
-                               : normalized;
-
-        std::string real_name = Find_Case_Insensitive(dir, filename);
-        if (!real_name.empty()) {
-            std::string real_path = dir + "/" + real_name;
-            handle = fopen(real_path.c_str(), fmode);
-        }
-    }
-
-    if (!handle) {
-        Platform_SetError("Failed to open file: %s", path);
-        return nullptr;
-    }
-
-    PlatformFile* file = new PlatformFile();
-    file->handle = handle;
-    file->path = normalized;
-    file->mode = mode;
-
-    // Get file size
-    fseek(handle, 0, SEEK_END);
-    file->size = ftell(handle);
-    fseek(handle, 0, SEEK_SET);
-
-    return file;
-}
-
-void Platform_File_Close(PlatformFile* file) {
-    if (file) {
-        if (file->handle) {
-            fclose(file->handle);
-        }
-        delete file;
-    }
-}
-
-int Platform_File_Read(PlatformFile* file, void* buffer, int size) {
-    if (!file || !file->handle) return -1;
-    return (int)fread(buffer, 1, size, file->handle);
-}
-
-int Platform_File_Write(PlatformFile* file, const void* buffer, int size) {
-    if (!file || !file->handle) return -1;
-    return (int)fwrite(buffer, 1, size, file->handle);
-}
-
-bool Platform_File_Seek(PlatformFile* file, int64_t offset, SeekOrigin origin) {
-    if (!file || !file->handle) return false;
-
-    int whence;
-    switch (origin) {
-        case SEEK_FROM_START: whence = SEEK_SET; break;
-        case SEEK_FROM_CURRENT: whence = SEEK_CUR; break;
-        case SEEK_FROM_END: whence = SEEK_END; break;
-        default: return false;
-    }
-
-    return fseek(file->handle, (long)offset, whence) == 0;
-}
-
-int64_t Platform_File_Tell(PlatformFile* file) {
-    if (!file || !file->handle) return -1;
-    return ftell(file->handle);
-}
-
-int64_t Platform_File_Size(PlatformFile* file) {
-    if (!file) return -1;
-    return file->size;
-}
-
-bool Platform_File_Eof(PlatformFile* file) {
-    if (!file || !file->handle) return true;
-    return feof(file->handle) != 0;
 }
 ```
 
-### 7.3 Directory Enumeration
+### 7.3 FFI File Exports
 
-```cpp
-//=============================================================================
+File: `platform/src/ffi/files.rs`
+```rust
+//! File system FFI exports
+
+use crate::files::{self, PlatformFile, PlatformDir, DirEntry, FileMode, SeekOrigin};
+use crate::error::catch_panic;
+use std::ffi::{c_char, CStr, c_void};
+
+// =============================================================================
+// Path Functions
+// =============================================================================
+
+/// Get base path
+#[no_mangle]
+pub extern "C" fn Platform_GetBasePath() -> *const c_char {
+    static mut PATH_BUF: [u8; 512] = [0; 512];
+
+    let path = files::get_base_path();
+    let bytes = path.as_bytes();
+    let len = bytes.len().min(511);
+
+    unsafe {
+        PATH_BUF[..len].copy_from_slice(&bytes[..len]);
+        PATH_BUF[len] = 0;
+        PATH_BUF.as_ptr() as *const c_char
+    }
+}
+
+/// Get preferences path
+#[no_mangle]
+pub extern "C" fn Platform_GetPrefPath() -> *const c_char {
+    static mut PATH_BUF: [u8; 512] = [0; 512];
+
+    let path = files::get_pref_path();
+    let bytes = path.as_bytes();
+    let len = bytes.len().min(511);
+
+    unsafe {
+        PATH_BUF[..len].copy_from_slice(&bytes[..len]);
+        PATH_BUF[len] = 0;
+        PATH_BUF.as_ptr() as *const c_char
+    }
+}
+
+/// Normalize a path (convert Windows to Unix)
+#[no_mangle]
+pub unsafe extern "C" fn Platform_NormalizePath(path: *mut c_char) {
+    if path.is_null() {
+        return;
+    }
+
+    let c_str = CStr::from_ptr(path);
+    if let Ok(s) = c_str.to_str() {
+        let normalized = files::path::normalize(s);
+        let bytes = normalized.as_bytes();
+        let len = bytes.len();
+
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), path as *mut u8, len);
+        *path.add(len) = 0;
+    }
+}
+
+// =============================================================================
+// File Operations
+// =============================================================================
+
+/// Open a file
+#[no_mangle]
+pub unsafe extern "C" fn Platform_File_Open(
+    path: *const c_char,
+    mode: FileMode,
+) -> *mut PlatformFile {
+    if path.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    match PlatformFile::open(path_str, mode) {
+        Ok(file) => Box::into_raw(Box::new(file)),
+        Err(e) => {
+            crate::error::set_error(e.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Close a file
+#[no_mangle]
+pub extern "C" fn Platform_File_Close(file: *mut PlatformFile) {
+    if !file.is_null() {
+        unsafe {
+            drop(Box::from_raw(file));
+        }
+    }
+}
+
+/// Read from file
+#[no_mangle]
+pub unsafe extern "C" fn Platform_File_Read(
+    file: *mut PlatformFile,
+    buffer: *mut c_void,
+    size: i32,
+) -> i32 {
+    if file.is_null() || buffer.is_null() || size <= 0 {
+        return -1;
+    }
+
+    let file = &mut *file;
+    let buf = std::slice::from_raw_parts_mut(buffer as *mut u8, size as usize);
+
+    match file.read(buf) {
+        Ok(n) => n as i32,
+        Err(_) => -1,
+    }
+}
+
+/// Write to file
+#[no_mangle]
+pub unsafe extern "C" fn Platform_File_Write(
+    file: *mut PlatformFile,
+    buffer: *const c_void,
+    size: i32,
+) -> i32 {
+    if file.is_null() || buffer.is_null() || size <= 0 {
+        return -1;
+    }
+
+    let file = &mut *file;
+    let buf = std::slice::from_raw_parts(buffer as *const u8, size as usize);
+
+    match file.write(buf) {
+        Ok(n) => n as i32,
+        Err(_) => -1,
+    }
+}
+
+/// Seek in file
+#[no_mangle]
+pub unsafe extern "C" fn Platform_File_Seek(
+    file: *mut PlatformFile,
+    offset: i64,
+    origin: SeekOrigin,
+) -> i32 {
+    if file.is_null() {
+        return -1;
+    }
+
+    let file = &mut *file;
+    match file.seek(offset, origin) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Get file position
+#[no_mangle]
+pub unsafe extern "C" fn Platform_File_Tell(file: *mut PlatformFile) -> i64 {
+    if file.is_null() {
+        return -1;
+    }
+
+    let file = &mut *file;
+    file.tell().map(|p| p as i64).unwrap_or(-1)
+}
+
+/// Get file size
+#[no_mangle]
+pub unsafe extern "C" fn Platform_File_Size(file: *const PlatformFile) -> i64 {
+    if file.is_null() {
+        return -1;
+    }
+
+    (*file).size()
+}
+
+/// Check if at end of file
+#[no_mangle]
+pub unsafe extern "C" fn Platform_File_Eof(file: *mut PlatformFile) -> bool {
+    if file.is_null() {
+        return true;
+    }
+
+    (*file).eof()
+}
+
+// =============================================================================
 // Directory Operations
-//=============================================================================
+// =============================================================================
 
-struct PlatformDir {
-    DIR* handle;
-    std::string path;
-};
-
-PlatformDir* Platform_Dir_Open(const char* path) {
-    std::string normalized = path;
-    for (char& c : normalized) {
-        if (c == '\\') c = '/';
+/// Open a directory for reading
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Dir_Open(path: *const c_char) -> *mut PlatformDir {
+    if path.is_null() {
+        return std::ptr::null_mut();
     }
 
-    DIR* dir = opendir(normalized.c_str());
-    if (!dir) {
-        Platform_SetError("Failed to open directory: %s", path);
-        return nullptr;
-    }
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
 
-    PlatformDir* pdir = new PlatformDir();
-    pdir->handle = dir;
-    pdir->path = normalized;
-    return pdir;
+    match PlatformDir::open(path_str) {
+        Ok(dir) => Box::into_raw(Box::new(dir)),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
-bool Platform_Dir_Read(PlatformDir* dir, DirEntry* entry) {
-    if (!dir || !dir->handle) return false;
-
-    struct dirent* d = readdir(dir->handle);
-    if (!d) return false;
-
-    // Skip . and ..
-    while (d && (strcmp(d->d_name, ".") == 0 || strcmp(d->d_name, "..") == 0)) {
-        d = readdir(dir->handle);
+/// Read next directory entry
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Dir_Read(
+    dir: *mut PlatformDir,
+    entry: *mut DirEntry,
+) -> bool {
+    if dir.is_null() || entry.is_null() {
+        return false;
     }
-    if (!d) return false;
 
-    strncpy(entry->name, d->d_name, sizeof(entry->name) - 1);
-    entry->name[sizeof(entry->name) - 1] = '\0';
-
-    // Get file info
-    std::string full_path = dir->path + "/" + d->d_name;
-    struct stat st;
-    if (stat(full_path.c_str(), &st) == 0) {
-        entry->is_directory = S_ISDIR(st.st_mode);
-        entry->size = st.st_size;
+    if let Some(e) = (*dir).read() {
+        *entry = e;
+        true
     } else {
-        entry->is_directory = false;
-        entry->size = 0;
+        false
     }
-
-    return true;
 }
 
-void Platform_Dir_Close(PlatformDir* dir) {
-    if (dir) {
-        if (dir->handle) {
-            closedir(dir->handle);
+/// Close directory
+#[no_mangle]
+pub extern "C" fn Platform_Dir_Close(dir: *mut PlatformDir) {
+    if !dir.is_null() {
+        unsafe {
+            drop(Box::from_raw(dir));
         }
-        delete dir;
     }
 }
-```
 
-### 7.4 Windows Compatibility Wrappers
+// =============================================================================
+// Utility Functions
+// =============================================================================
 
-File: `include/compat/file_wrapper.h`
-```cpp
-#ifndef FILE_WRAPPER_H
-#define FILE_WRAPPER_H
-
-#include "platform/platform_file.h"
-#include <cstring>
-
-//=============================================================================
-// Windows Handle Types
-//=============================================================================
-
-#define INVALID_HANDLE_VALUE ((HANDLE)(intptr_t)-1)
-
-//=============================================================================
-// CreateFile
-//=============================================================================
-
-#define GENERIC_READ            0x80000000
-#define GENERIC_WRITE           0x40000000
-#define FILE_SHARE_READ         0x00000001
-#define FILE_SHARE_WRITE        0x00000002
-#define CREATE_NEW              1
-#define CREATE_ALWAYS           2
-#define OPEN_EXISTING           3
-#define OPEN_ALWAYS             4
-#define TRUNCATE_EXISTING       5
-
-inline HANDLE CreateFile(const char* path, DWORD access, DWORD share,
-                         void* security, DWORD creation, DWORD flags,
-                         HANDLE template_file) {
-    (void)share;
-    (void)security;
-    (void)flags;
-    (void)template_file;
-
-    FileMode mode = 0;
-    if (access & GENERIC_READ) mode |= FILE_READ;
-    if (access & GENERIC_WRITE) mode |= FILE_WRITE;
-
-    // Handle creation disposition
-    if (creation == CREATE_ALWAYS || creation == TRUNCATE_EXISTING) {
-        mode = FILE_WRITE;  // Overwrite
+/// Check if file exists
+#[no_mangle]
+pub unsafe extern "C" fn Platform_File_Exists(path: *const c_char) -> bool {
+    if path.is_null() {
+        return false;
     }
 
-    PlatformFile* file = Platform_File_Open(path, mode);
-    return file ? (HANDLE)file : INVALID_HANDLE_VALUE;
-}
-
-inline BOOL ReadFile(HANDLE handle, void* buffer, DWORD size,
-                     DWORD* bytes_read, void* overlapped) {
-    (void)overlapped;
-    PlatformFile* file = (PlatformFile*)handle;
-    int result = Platform_File_Read(file, buffer, size);
-    if (bytes_read) *bytes_read = (result >= 0) ? result : 0;
-    return result >= 0;
-}
-
-inline BOOL WriteFile(HANDLE handle, const void* buffer, DWORD size,
-                      DWORD* bytes_written, void* overlapped) {
-    (void)overlapped;
-    PlatformFile* file = (PlatformFile*)handle;
-    int result = Platform_File_Write(file, buffer, size);
-    if (bytes_written) *bytes_written = (result >= 0) ? result : 0;
-    return result >= 0;
-}
-
-inline BOOL CloseHandle(HANDLE handle) {
-    Platform_File_Close((PlatformFile*)handle);
-    return TRUE;
-}
-
-#define FILE_BEGIN      0
-#define FILE_CURRENT    1
-#define FILE_END        2
-
-inline DWORD SetFilePointer(HANDLE handle, LONG distance, LONG* high,
-                            DWORD method) {
-    (void)high;  // We don't support 64-bit seeks through this API
-    SeekOrigin origin;
-    switch (method) {
-        case FILE_BEGIN: origin = SEEK_FROM_START; break;
-        case FILE_CURRENT: origin = SEEK_FROM_CURRENT; break;
-        case FILE_END: origin = SEEK_FROM_END; break;
-        default: return (DWORD)-1;
+    if let Ok(s) = CStr::from_ptr(path).to_str() {
+        files::exists(s)
+    } else {
+        false
     }
-    Platform_File_Seek((PlatformFile*)handle, distance, origin);
-    return (DWORD)Platform_File_Tell((PlatformFile*)handle);
 }
 
-inline DWORD GetFileSize(HANDLE handle, DWORD* high) {
-    if (high) *high = 0;
-    return (DWORD)Platform_File_Size((PlatformFile*)handle);
-}
-
-//=============================================================================
-// FindFirstFile / FindNextFile
-//=============================================================================
-
-typedef struct {
-    DWORD dwFileAttributes;
-    char cFileName[260];
-    // Other fields not used
-} WIN32_FIND_DATA;
-
-#define FILE_ATTRIBUTE_DIRECTORY    0x10
-#define FILE_ATTRIBUTE_NORMAL       0x80
-
-struct FindHandle {
-    PlatformDir* dir;
-    std::string pattern;
-};
-
-inline HANDLE FindFirstFile(const char* pattern, WIN32_FIND_DATA* data) {
-    // Extract directory from pattern
-    std::string path = pattern;
-    for (char& c : path) if (c == '\\') c = '/';
-
-    size_t last_sep = path.rfind('/');
-    std::string dir = (last_sep != std::string::npos) ? path.substr(0, last_sep) : ".";
-
-    PlatformDir* pdir = Platform_Dir_Open(dir.c_str());
-    if (!pdir) return INVALID_HANDLE_VALUE;
-
-    FindHandle* fh = new FindHandle();
-    fh->dir = pdir;
-    fh->pattern = (last_sep != std::string::npos) ? path.substr(last_sep + 1) : path;
-
-    // Read first entry
-    DirEntry entry;
-    if (Platform_Dir_Read(pdir, &entry)) {
-        strcpy(data->cFileName, entry.name);
-        data->dwFileAttributes = entry.is_directory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
-        return (HANDLE)fh;
+/// Check if path is directory
+#[no_mangle]
+pub unsafe extern "C" fn Platform_IsDirectory(path: *const c_char) -> bool {
+    if path.is_null() {
+        return false;
     }
 
-    Platform_Dir_Close(pdir);
-    delete fh;
-    return INVALID_HANDLE_VALUE;
-}
-
-inline BOOL FindNextFile(HANDLE handle, WIN32_FIND_DATA* data) {
-    FindHandle* fh = (FindHandle*)handle;
-    if (!fh) return FALSE;
-
-    DirEntry entry;
-    if (Platform_Dir_Read(fh->dir, &entry)) {
-        strcpy(data->cFileName, entry.name);
-        data->dwFileAttributes = entry.is_directory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
-        return TRUE;
+    if let Ok(s) = CStr::from_ptr(path).to_str() {
+        files::is_directory(s)
+    } else {
+        false
     }
-    return FALSE;
 }
 
-inline BOOL FindClose(HANDLE handle) {
-    FindHandle* fh = (FindHandle*)handle;
-    if (fh) {
-        Platform_Dir_Close(fh->dir);
-        delete fh;
+/// Create directory
+#[no_mangle]
+pub unsafe extern "C" fn Platform_CreateDirectory(path: *const c_char) -> bool {
+    if path.is_null() {
+        return false;
     }
-    return TRUE;
-}
 
-//=============================================================================
-// File Attributes
-//=============================================================================
-
-inline DWORD GetFileAttributes(const char* path) {
-    if (Platform_IsDirectory(path)) return FILE_ATTRIBUTE_DIRECTORY;
-    if (Platform_PathExists(path)) return FILE_ATTRIBUTE_NORMAL;
-    return (DWORD)-1;
-}
-
-inline BOOL SetFileAttributes(const char* path, DWORD attributes) {
-    (void)path;
-    (void)attributes;
-    return TRUE;  // No-op on Unix
-}
-
-#endif // FILE_WRAPPER_H
-```
-
-### 7.5 MIX File Support
-
-The MIX file format should work mostly unchanged, but we need to ensure path handling works:
-
-File: `src/game/mixfile_compat.cpp`
-```cpp
-// Patch for MIXFILE.CPP to handle paths correctly
-
-#include "platform/platform_file.h"
-
-// Override the file open to use our path normalization
-bool Mix_Open_File(const char* filename) {
-    char normalized[256];
-    strncpy(normalized, filename, sizeof(normalized));
-    Platform_NormalizePath(normalized);
-
-    // Use platform file open
-    PlatformFile* file = Platform_File_Open(normalized, FILE_READ);
-    if (!file) return false;
-
-    // ... rest of MIX loading
-    return true;
+    if let Ok(s) = CStr::from_ptr(path).to_str() {
+        files::create_directory(s).is_ok()
+    } else {
+        false
+    }
 }
 ```
 
 ## Tasks Breakdown
 
 ### Phase 1: Path Handling (1 day)
-- [ ] Implement path normalization (backslash → forward slash)
-- [ ] Implement case-insensitive file lookup
-- [ ] Handle drive letter removal
-- [ ] Set up base path and preferences path
+- [ ] Implement path normalization
+- [ ] Implement case-insensitive lookup
+- [ ] Test path conversion
 
 ### Phase 2: File Operations (1.5 days)
-- [ ] Implement `Platform_File_Open/Close/Read/Write`
-- [ ] Implement seek and size operations
-- [ ] Test with simple file I/O
+- [ ] Implement file open/close
+- [ ] Implement read/write/seek
+- [ ] Test file I/O
 
 ### Phase 3: Directory Operations (0.5 days)
-- [ ] Implement directory enumeration
-- [ ] Test with file listing
+- [ ] Implement directory iteration
+- [ ] Test directory listing
 
-### Phase 4: Windows Wrappers (1 day)
-- [ ] Create `file_wrapper.h`
-- [ ] Map `CreateFile`/`ReadFile`/`WriteFile`
-- [ ] Map `FindFirstFile`/`FindNextFile`
-- [ ] Test with game file loading
+### Phase 4: FFI Exports (1 day)
+- [ ] Create FFI functions
+- [ ] Verify cbindgen output
+- [ ] Test from C++
 
-### Phase 5: MIX File Integration (1 day)
-- [ ] Verify MIX file loading works
-- [ ] Test asset loading from MIX archives
-- [ ] Debug any path issues
-
-## Testing Strategy
-
-### Test 1: Path Normalization
-Convert Windows paths and verify correctness.
-
-### Test 2: Case-Insensitive Lookup
-Find files regardless of case.
-
-### Test 3: File Read/Write
-Read and write test files.
-
-### Test 4: MIX File Loading
-Load CONQUER.MIX and extract assets.
+### Phase 5: MIX Integration (1 day)
+- [ ] Test MIX file loading
+- [ ] Debug path issues
+- [ ] Verify asset loading
 
 ## Acceptance Criteria
 
 - [ ] Windows paths converted correctly
 - [ ] Files found regardless of case
 - [ ] MIX files load successfully
-- [ ] Game assets load correctly
 - [ ] Save games work
+- [ ] All FFI functions work
 
 ## Estimated Duration
 **4-5 days**
 
 ## Dependencies
-- Plan 06 (Memory Management) completed
-- POSIX file APIs available
+- Plan 06 (Memory) completed
+- std::fs, std::path
 
 ## Next Plan
 Once file system is working, proceed to **Plan 08: Audio System**
