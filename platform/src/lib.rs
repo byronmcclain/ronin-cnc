@@ -7,11 +7,17 @@
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
+pub mod audio;
+pub mod blit;
+pub mod compression;
 pub mod error;
 pub mod ffi;
+pub mod files;
 pub mod graphics;
 pub mod input;
+pub mod memory;
 pub mod timer;
+pub mod util;
 
 pub use error::PlatformError;
 pub use graphics::DisplayMode;

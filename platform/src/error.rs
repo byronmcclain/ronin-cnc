@@ -15,6 +15,8 @@ pub enum PlatformError {
     NotInitialized,
     InvalidParameter(String),
     NullPointer,
+    InvalidData,
+    BufferTooSmall,
 }
 
 impl std::fmt::Display for PlatformError {
@@ -29,6 +31,8 @@ impl std::fmt::Display for PlatformError {
             PlatformError::NotInitialized => write!(f, "Not initialized"),
             PlatformError::InvalidParameter(s) => write!(f, "Invalid parameter: {}", s),
             PlatformError::NullPointer => write!(f, "Null pointer"),
+            PlatformError::InvalidData => write!(f, "Invalid data"),
+            PlatformError::BufferTooSmall => write!(f, "Buffer too small"),
         }
     }
 }
@@ -79,6 +83,8 @@ pub fn result_to_code<T>(result: Result<T, PlatformError>) -> i32 {
                 PlatformError::Audio(_) => -12,
                 PlatformError::Io(_) => -13,
                 PlatformError::Network(_) => -14,
+                PlatformError::InvalidData => -15,
+                PlatformError::BufferTooSmall => -16,
             }
         }
     }

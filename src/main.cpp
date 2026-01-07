@@ -213,6 +213,212 @@ int test_input() {
     return 0;
 }
 
+int test_memory() {
+    TEST("Memory system");
+
+    // Test basic allocation
+    void* ptr1 = Platform_Alloc(1024, 0);  // MEM_NORMAL
+    if (ptr1 == nullptr) FAIL("Allocation returned null");
+
+    // Test zero-initialized allocation
+    void* ptr2 = Platform_Alloc(256, 0x0004);  // MEM_CLEAR
+    if (ptr2 == nullptr) FAIL("Clear allocation returned null");
+
+    // Verify zero-initialized
+    uint8_t* bytes = static_cast<uint8_t*>(ptr2);
+    bool all_zero = true;
+    for (int i = 0; i < 256; i++) {
+        if (bytes[i] != 0) {
+            all_zero = false;
+            break;
+        }
+    }
+    if (!all_zero) FAIL("MEM_CLEAR did not zero memory");
+
+    // Test memory operations
+    const char* test_str = "Hello, Memory!";
+    size_t str_len = strlen(test_str) + 1;
+    Platform_MemCopy(ptr1, test_str, str_len);
+
+    if (Platform_MemCmp(ptr1, test_str, str_len) != 0) {
+        FAIL("MemCopy/MemCmp failed");
+    }
+
+    // Test MemSet
+    Platform_MemSet(ptr2, 0xAB, 256);
+    bytes = static_cast<uint8_t*>(ptr2);
+    bool all_ab = true;
+    for (int i = 0; i < 256; i++) {
+        if (bytes[i] != 0xAB) {
+            all_ab = false;
+            break;
+        }
+    }
+    if (!all_ab) FAIL("MemSet failed");
+
+    // Test ZeroMemory
+    Platform_ZeroMemory(ptr2, 256);
+    bytes = static_cast<uint8_t*>(ptr2);
+    all_zero = true;
+    for (int i = 0; i < 256; i++) {
+        if (bytes[i] != 0) {
+            all_zero = false;
+            break;
+        }
+    }
+    if (!all_zero) FAIL("ZeroMemory failed");
+
+    // Test reallocation
+    void* ptr3 = Platform_Alloc(64, 0);
+    if (ptr3 == nullptr) FAIL("Small allocation failed");
+
+    void* ptr3_new = Platform_Realloc(ptr3, 64, 128);
+    if (ptr3_new == nullptr) FAIL("Realloc failed");
+
+    // Check statistics
+    size_t allocated = Platform_Mem_GetAllocated();
+    size_t count = Platform_Mem_GetCount();
+    size_t peak = Platform_Mem_GetPeak();
+
+    if (allocated == 0) FAIL("Allocated should be > 0");
+    if (count == 0) FAIL("Count should be > 0");
+    if (peak == 0) FAIL("Peak should be > 0");
+
+    printf("(alloc=%zu, count=%zu, peak=%zu) ", allocated, count, peak);
+
+    // Free all allocations
+    Platform_Free(ptr1, 1024);
+    Platform_Free(ptr2, 256);
+    Platform_Free(ptr3_new, 128);
+
+    // Check RAM queries don't crash
+    size_t free_ram = Platform_Ram_Free();
+    size_t total_ram = Platform_Ram_Total();
+    if (free_ram == 0 || total_ram == 0) {
+        printf("(ram: free=%zu, total=%zu) ", free_ram, total_ram);
+    }
+
+    PASS();
+    return 0;
+}
+
+int test_files() {
+    TEST("File system");
+
+    // Test path normalization
+    char path[256] = "DATA\\CONQUER.MIX";
+    Platform_NormalizePath(path);
+    if (strcmp(path, "DATA/CONQUER.MIX") != 0) {
+        FAIL("Path normalization failed");
+    }
+
+    // Test file write
+    const char* test_file = "/tmp/platform_test_file.txt";
+    const char* test_data = "Hello from C++!";
+
+    PlatformFile* file = Platform_File_Open(test_file, FILE_MODE_WRITE);
+    if (file == nullptr) {
+        FAIL("Failed to open file for writing");
+    }
+
+    int written = Platform_File_Write(file, test_data, strlen(test_data));
+    if (written != (int)strlen(test_data)) {
+        Platform_File_Close(file);
+        FAIL("Write returned wrong byte count");
+    }
+    Platform_File_Close(file);
+
+    // Test file exists
+    if (!Platform_File_Exists(test_file)) {
+        FAIL("File should exist after writing");
+    }
+
+    // Test file size
+    int64_t size = Platform_File_GetSize(test_file);
+    if (size != (int64_t)strlen(test_data)) {
+        FAIL("File size mismatch");
+    }
+
+    // Test file read
+    file = Platform_File_Open(test_file, FILE_MODE_READ);
+    if (file == nullptr) {
+        FAIL("Failed to open file for reading");
+    }
+
+    if (Platform_File_Size(file) != (int64_t)strlen(test_data)) {
+        Platform_File_Close(file);
+        FAIL("File size from handle mismatch");
+    }
+
+    char buffer[256] = {0};
+    int bytes_read = Platform_File_Read(file, buffer, sizeof(buffer) - 1);
+    if (bytes_read != (int)strlen(test_data)) {
+        Platform_File_Close(file);
+        FAIL("Read returned wrong byte count");
+    }
+
+    if (strcmp(buffer, test_data) != 0) {
+        Platform_File_Close(file);
+        FAIL("Read data mismatch");
+    }
+
+    // Test seek and tell
+    Platform_File_Seek(file, 0, SEEK_ORIGIN_START);
+    if (Platform_File_Tell(file) != 0) {
+        Platform_File_Close(file);
+        FAIL("Tell after seek to start should be 0");
+    }
+
+    Platform_File_Seek(file, 6, SEEK_ORIGIN_START);
+    if (Platform_File_Tell(file) != 6) {
+        Platform_File_Close(file);
+        FAIL("Tell after seek to 6 should be 6");
+    }
+
+    // Test eof
+    Platform_File_Seek(file, 0, SEEK_ORIGIN_END);
+    if (!Platform_File_Eof(file)) {
+        Platform_File_Close(file);
+        FAIL("Should be at EOF after seeking to end");
+    }
+
+    Platform_File_Close(file);
+
+    // Test directory operations
+    const char* test_dir = "/tmp/platform_test_dir";
+    if (!Platform_CreateDirectory(test_dir)) {
+        // May already exist, that's ok
+    }
+
+    if (!Platform_IsDirectory(test_dir)) {
+        FAIL("Created path should be a directory");
+    }
+
+    // Test directory iteration
+    PlatformDir* dir = Platform_Dir_Open("/tmp");
+    if (dir == nullptr) {
+        FAIL("Failed to open /tmp directory");
+    }
+
+    DirEntry entry;
+    int entry_count = 0;
+    while (Platform_Dir_Read(dir, &entry)) {
+        entry_count++;
+    }
+    Platform_Dir_Close(dir);
+
+    if (entry_count == 0) {
+        FAIL("/tmp should have some entries");
+    }
+
+    // Cleanup
+    Platform_File_Delete(test_file);
+    Platform_DeleteDirectory(test_dir);
+
+    PASS();
+    return 0;
+}
+
 int test_timing() {
     TEST("Timing system");
 
@@ -517,6 +723,21 @@ int run_tests() {
     {
         Platform_Init();
         failures += test_timing();
+        Platform_Shutdown();
+    }
+
+    // Memory test
+    {
+        Platform_Init();
+        failures += test_memory();
+        Platform_Mem_DumpLeaks();  // Should show no leaks
+        Platform_Shutdown();
+    }
+
+    // File system test
+    {
+        Platform_Init();
+        failures += test_files();
         Platform_Shutdown();
     }
 

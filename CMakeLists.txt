@@ -95,3 +95,69 @@ if(APPLE)
         iconv
     )
 endif()
+
+# =============================================================================
+# Audio Integration Test
+# =============================================================================
+
+add_executable(TestAudio src/test_audio.cpp)
+
+target_include_directories(TestAudio PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+add_dependencies(TestAudio generate_headers)
+
+target_link_libraries(TestAudio PRIVATE redalert_platform)
+
+if(APPLE)
+    target_link_libraries(TestAudio PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+# =============================================================================
+# Assembly Replacement Integration Test
+# =============================================================================
+
+add_executable(TestAsm src/test_asm.cpp)
+
+target_include_directories(TestAsm PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+add_dependencies(TestAsm generate_headers)
+
+target_link_libraries(TestAsm PRIVATE redalert_platform)
+
+if(APPLE)
+    target_link_libraries(TestAsm PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()

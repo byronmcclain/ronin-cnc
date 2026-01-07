@@ -235,9 +235,9 @@ clang -fsyntax-only -x c header.h
 
 ### Phase 08: Audio System
 - [ ] 08a: Audio device setup
-- [ ] 08b: WAV playback
+- [ ] 08b: PCM playback
 - [ ] 08c: ADPCM decoder
-- [ ] 08d: Sound mixing
+- [ ] 08d: Audio integration
 
 ### Phase 09: Assembly Rewrites
 - [ ] 09a: Blitting routines

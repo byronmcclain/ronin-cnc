@@ -24,6 +24,26 @@
 #define PLATFORM_VERSION 1
 
 /**
+ * Default shadow intensity (50% darkness)
+ */
+#define DEFAULT_SHADOW_INTENSITY 0.5
+
+/**
+ * Initial CRC value for streaming calculation
+ */
+#define CRC_INIT 4294967295
+
+/**
+ * File open mode
+ */
+typedef enum FileMode {
+  FILE_MODE_READ = 1,
+  FILE_MODE_WRITE = 2,
+  FILE_MODE_READ_WRITE = 3,
+  FILE_MODE_APPEND = 4,
+} FileMode;
+
+/**
  * Key codes (matching Windows VK_* values for compatibility)
  */
 typedef enum KeyCode {
@@ -94,6 +114,25 @@ typedef enum PlatformResult {
 } PlatformResult;
 
 /**
+ * Seek origin
+ */
+typedef enum SeekOrigin {
+  SEEK_ORIGIN_START = 0,
+  SEEK_ORIGIN_CURRENT = 1,
+  SEEK_ORIGIN_END = 2,
+} SeekOrigin;
+
+/**
+ * Directory iterator
+ */
+typedef struct PlatformDir PlatformDir;
+
+/**
+ * Platform file handle
+ */
+typedef struct PlatformFile PlatformFile;
+
+/**
  * Display mode configuration
  */
 typedef struct DisplayMode {
@@ -127,6 +166,60 @@ typedef int32_t TimerHandle;
  * C timer callback type
  */
 typedef void (*CTimerCallback)(void*);
+
+/**
+ * Directory entry information
+ */
+typedef struct DirEntry {
+  /**
+   * Filename (null-terminated, max 260 chars)
+   */
+  uint8_t name[260];
+  /**
+   * Is this entry a directory?
+   */
+  bool is_directory;
+  /**
+   * File size in bytes (0 for directories)
+   */
+  int64_t size;
+} DirEntry;
+
+/**
+ * Audio configuration
+ */
+typedef struct AudioConfig {
+  int32_t sample_rate;
+  int32_t channels;
+  int32_t bits_per_sample;
+  int32_t buffer_size;
+} AudioConfig;
+
+/**
+ * Sound handle type
+ */
+typedef int32_t SoundHandle;
+
+/**
+ * Playing sound handle
+ */
+typedef int32_t PlayHandle;
+
+/**
+ * Clipping rectangle for blit operations
+ *
+ * Used to define source regions and handle clipping to destination bounds.
+ */
+typedef struct ClipRect {
+  int32_t x;
+  int32_t y;
+  int32_t width;
+  int32_t height;
+} ClipRect;
+
+#define INVALID_SOUND_HANDLE -1
+
+#define INVALID_PLAY_HANDLE -1
 
 #define INVALID_TIMER_HANDLE -1
 
@@ -547,6 +640,674 @@ double Platform_Frame_GetTime(void);
  * Get current FPS (rolling average)
  */
 double Platform_Frame_GetFPS(void);
+
+/**
+ * Allocate memory
+ */
+void *Platform_Alloc(uintptr_t size, uint32_t flags);
+
+/**
+ * Free memory
+ */
+void Platform_Free(void *ptr, uintptr_t size);
+
+/**
+ * Reallocate memory
+ */
+void *Platform_Realloc(void *ptr, uintptr_t old_size, uintptr_t new_size);
+
+/**
+ * Get free RAM (returns large value for compatibility)
+ */
+uintptr_t Platform_Ram_Free(void);
+
+/**
+ * Get total RAM
+ */
+uintptr_t Platform_Ram_Total(void);
+
+/**
+ * Get current allocation total
+ */
+uintptr_t Platform_Mem_GetAllocated(void);
+
+/**
+ * Get peak allocation
+ */
+uintptr_t Platform_Mem_GetPeak(void);
+
+/**
+ * Get allocation count
+ */
+uintptr_t Platform_Mem_GetCount(void);
+
+/**
+ * Dump leaks (debug only)
+ */
+void Platform_Mem_DumpLeaks(void);
+
+/**
+ * Copy memory (memcpy) - non-overlapping
+ */
+void Platform_MemCopy(void *dest, const void *src, uintptr_t count);
+
+/**
+ * Move memory (memmove) - handles overlapping
+ */
+void Platform_MemMove(void *dest, const void *src, uintptr_t count);
+
+/**
+ * Set memory (memset)
+ */
+void Platform_MemSet(void *dest, int32_t value, uintptr_t count);
+
+/**
+ * Compare memory (memcmp)
+ */
+int32_t Platform_MemCmp(const void *s1, const void *s2, uintptr_t count);
+
+/**
+ * Zero memory
+ */
+void Platform_ZeroMemory(void *dest, uintptr_t count);
+
+/**
+ * Get base path (executable directory)
+ */
+const char *Platform_GetBasePath(void);
+
+/**
+ * Get preferences path (user data directory)
+ */
+const char *Platform_GetPrefPath(void);
+
+/**
+ * Initialize file system
+ */
+void Platform_Files_Init(const char *org_name, const char *app_name);
+
+/**
+ * Normalize a path (convert Windows to Unix style, modifies in place)
+ */
+void Platform_NormalizePath(char *path);
+
+/**
+ * Open a file
+ */
+struct PlatformFile *Platform_File_Open(const char *path, enum FileMode mode);
+
+/**
+ * Close a file
+ */
+void Platform_File_Close(struct PlatformFile *file);
+
+/**
+ * Read from file
+ */
+int32_t Platform_File_Read(struct PlatformFile *file, void *buffer, int32_t size);
+
+/**
+ * Write to file
+ */
+int32_t Platform_File_Write(struct PlatformFile *file, const void *buffer, int32_t size);
+
+/**
+ * Seek in file
+ */
+int32_t Platform_File_Seek(struct PlatformFile *file, int64_t offset, enum SeekOrigin origin);
+
+/**
+ * Get file position
+ */
+int64_t Platform_File_Tell(struct PlatformFile *file);
+
+/**
+ * Get file size
+ */
+int64_t Platform_File_Size(const struct PlatformFile *file);
+
+/**
+ * Check if at end of file
+ */
+bool Platform_File_Eof(struct PlatformFile *file);
+
+/**
+ * Flush file buffers
+ */
+bool Platform_File_Flush(struct PlatformFile *file);
+
+/**
+ * Check if file exists
+ */
+bool Platform_File_Exists(const char *path);
+
+/**
+ * Get file size without opening
+ */
+int64_t Platform_File_GetSize(const char *path);
+
+/**
+ * Delete a file
+ */
+bool Platform_File_Delete(const char *path);
+
+/**
+ * Copy a file
+ */
+int64_t Platform_File_Copy(const char *src, const char *dst);
+
+/**
+ * Open a directory for iteration
+ */
+struct PlatformDir *Platform_Dir_Open(const char *path);
+
+/**
+ * Read next directory entry
+ */
+bool Platform_Dir_Read(struct PlatformDir *dir, struct DirEntry *entry);
+
+/**
+ * Close directory
+ */
+void Platform_Dir_Close(struct PlatformDir *dir);
+
+/**
+ * Check if path is a directory
+ */
+bool Platform_IsDirectory(const char *path);
+
+/**
+ * Create a directory
+ */
+bool Platform_CreateDirectory(const char *path);
+
+/**
+ * Delete a directory
+ */
+bool Platform_DeleteDirectory(const char *path);
+
+/**
+ * Initialize audio subsystem
+ */
+int32_t Platform_Audio_Init(const struct AudioConfig *config);
+
+/**
+ * Shutdown audio subsystem
+ */
+void Platform_Audio_Shutdown(void);
+
+/**
+ * Check if audio is initialized
+ */
+bool Platform_Audio_IsInitialized(void);
+
+/**
+ * Set master volume (0.0 to 1.0)
+ */
+void Platform_Audio_SetMasterVolume(float volume);
+
+/**
+ * Get master volume
+ */
+float Platform_Audio_GetMasterVolume(void);
+
+/**
+ * Create a sound from raw PCM data in memory
+ */
+SoundHandle Platform_Sound_CreateFromMemory(const void *data,
+                                            int32_t size,
+                                            int32_t sample_rate,
+                                            int32_t channels,
+                                            int32_t bits_per_sample);
+
+/**
+ * Destroy a sound
+ */
+void Platform_Sound_Destroy(SoundHandle handle);
+
+/**
+ * Get number of loaded sounds
+ */
+int32_t Platform_Sound_GetCount(void);
+
+/**
+ * Play a sound
+ */
+PlayHandle Platform_Sound_Play(SoundHandle handle, float volume, float pan, bool looping);
+
+/**
+ * Stop a playing sound
+ */
+void Platform_Sound_Stop(PlayHandle handle);
+
+/**
+ * Stop all playing sounds
+ */
+void Platform_Sound_StopAll(void);
+
+/**
+ * Check if a sound is playing
+ */
+bool Platform_Sound_IsPlaying(PlayHandle handle);
+
+/**
+ * Set volume of a playing sound
+ */
+void Platform_Sound_SetVolume(PlayHandle handle, float volume);
+
+/**
+ * Pause a playing sound
+ */
+void Platform_Sound_Pause(PlayHandle handle);
+
+/**
+ * Resume a paused sound
+ */
+void Platform_Sound_Resume(PlayHandle handle);
+
+/**
+ * Get number of currently playing sounds
+ */
+int32_t Platform_Sound_GetPlayingCount(void);
+
+/**
+ * Create a sound from ADPCM compressed data
+ */
+SoundHandle Platform_Sound_CreateFromADPCM(const void *data,
+                                           int32_t size,
+                                           int32_t sample_rate,
+                                           int32_t channels);
+
+/**
+ * Create a sound from ADPCM data with initial decoder state
+ */
+SoundHandle Platform_Sound_CreateFromADPCMWithState(const void *data,
+                                                    int32_t size,
+                                                    int32_t sample_rate,
+                                                    int32_t channels,
+                                                    int32_t predictor,
+                                                    int32_t step_index);
+
+/**
+ * Clear buffer with a single value
+ *
+ * # Safety
+ * - `buffer` must point to valid memory of at least `size` bytes
+ */
+void Platform_Buffer_Clear(uint8_t *buffer, int32_t size, uint8_t value);
+
+/**
+ * Fill rectangular region with a value
+ *
+ * # Safety
+ * - `buffer` must point to valid memory of at least `pitch * buf_height` bytes
+ */
+void Platform_Buffer_FillRect(uint8_t *buffer,
+                              int32_t pitch,
+                              int32_t buf_width,
+                              int32_t buf_height,
+                              int32_t x,
+                              int32_t y,
+                              int32_t width,
+                              int32_t height,
+                              uint8_t value);
+
+/**
+ * Draw horizontal line
+ *
+ * # Safety
+ * - `buffer` must point to valid memory of at least `pitch * buf_height` bytes
+ */
+void Platform_Buffer_HLine(uint8_t *buffer,
+                           int32_t pitch,
+                           int32_t buf_width,
+                           int32_t buf_height,
+                           int32_t x,
+                           int32_t y,
+                           int32_t length,
+                           uint8_t color);
+
+/**
+ * Draw vertical line
+ *
+ * # Safety
+ * - `buffer` must point to valid memory of at least `pitch * buf_height` bytes
+ */
+void Platform_Buffer_VLine(uint8_t *buffer,
+                           int32_t pitch,
+                           int32_t buf_width,
+                           int32_t buf_height,
+                           int32_t x,
+                           int32_t y,
+                           int32_t length,
+                           uint8_t color);
+
+/**
+ * Blit from source buffer to destination (opaque)
+ *
+ * # Safety
+ * - `dest` must point to valid memory of at least `dest_pitch * dest_height` bytes
+ * - `src` must point to valid memory of at least `src_pitch * src_height` bytes
+ */
+void Platform_Buffer_ToBuffer(uint8_t *dest,
+                              int32_t dest_pitch,
+                              int32_t dest_width,
+                              int32_t dest_height,
+                              const uint8_t *src,
+                              int32_t src_pitch,
+                              int32_t src_width,
+                              int32_t src_height,
+                              int32_t dest_x,
+                              int32_t dest_y,
+                              int32_t src_x,
+                              int32_t src_y,
+                              int32_t width,
+                              int32_t height);
+
+/**
+ * Blit with transparency (color 0 = transparent)
+ *
+ * # Safety
+ * Same as Platform_Buffer_ToBuffer
+ */
+void Platform_Buffer_ToBufferTrans(uint8_t *dest,
+                                   int32_t dest_pitch,
+                                   int32_t dest_width,
+                                   int32_t dest_height,
+                                   const uint8_t *src,
+                                   int32_t src_pitch,
+                                   int32_t src_width,
+                                   int32_t src_height,
+                                   int32_t dest_x,
+                                   int32_t dest_y,
+                                   int32_t src_x,
+                                   int32_t src_y,
+                                   int32_t width,
+                                   int32_t height);
+
+/**
+ * Blit with custom transparent color key
+ *
+ * # Safety
+ * Same as Platform_Buffer_ToBuffer
+ */
+void Platform_Buffer_ToBufferTransKey(uint8_t *dest,
+                                      int32_t dest_pitch,
+                                      int32_t dest_width,
+                                      int32_t dest_height,
+                                      const uint8_t *src,
+                                      int32_t src_pitch,
+                                      int32_t src_width,
+                                      int32_t src_height,
+                                      int32_t dest_x,
+                                      int32_t dest_y,
+                                      int32_t src_x,
+                                      int32_t src_y,
+                                      int32_t width,
+                                      int32_t height,
+                                      uint8_t transparent_color);
+
+/**
+ * Apply remap table to buffer region
+ *
+ * # Safety
+ * - `buffer` must point to valid memory of at least `pitch * (y + height)` bytes
+ * - `remap_table` must point to exactly 256 bytes
+ */
+void Platform_Buffer_Remap(uint8_t *buffer,
+                           int32_t pitch,
+                           int32_t x,
+                           int32_t y,
+                           int32_t width,
+                           int32_t height,
+                           const uint8_t *remap_table);
+
+/**
+ * Apply remap table with transparency (skip color 0)
+ *
+ * # Safety
+ * Same as Platform_Buffer_Remap
+ */
+void Platform_Buffer_RemapTrans(uint8_t *buffer,
+                                int32_t pitch,
+                                int32_t x,
+                                int32_t y,
+                                int32_t width,
+                                int32_t height,
+                                const uint8_t *remap_table);
+
+/**
+ * Remap from source to destination
+ *
+ * # Safety
+ * - `dest` must point to valid memory
+ * - `src` must point to valid memory
+ * - `remap_table` must point to exactly 256 bytes
+ */
+void Platform_Buffer_RemapCopy(uint8_t *dest,
+                               int32_t dest_pitch,
+                               int32_t dest_x,
+                               int32_t dest_y,
+                               const uint8_t *src,
+                               int32_t src_pitch,
+                               int32_t src_x,
+                               int32_t src_y,
+                               int32_t width,
+                               int32_t height,
+                               const uint8_t *remap_table);
+
+/**
+ * Scale buffer using nearest-neighbor interpolation
+ *
+ * # Safety
+ * - `dest` must point to valid memory of at least `dest_pitch * dest_height` bytes
+ * - `src` must point to valid memory of at least `src_pitch * src_height` bytes
+ */
+void Platform_Buffer_Scale(uint8_t *dest,
+                           int32_t dest_pitch,
+                           int32_t dest_width,
+                           int32_t dest_height,
+                           const uint8_t *src,
+                           int32_t src_pitch,
+                           int32_t src_width,
+                           int32_t src_height,
+                           int32_t dest_x,
+                           int32_t dest_y,
+                           int32_t scale_width,
+                           int32_t scale_height);
+
+/**
+ * Scale buffer with transparency (skip color 0)
+ *
+ * # Safety
+ * Same as Platform_Buffer_Scale
+ */
+void Platform_Buffer_ScaleTrans(uint8_t *dest,
+                                int32_t dest_pitch,
+                                int32_t dest_width,
+                                int32_t dest_height,
+                                const uint8_t *src,
+                                int32_t src_pitch,
+                                int32_t src_width,
+                                int32_t src_height,
+                                int32_t dest_x,
+                                int32_t dest_y,
+                                int32_t scale_width,
+                                int32_t scale_height);
+
+/**
+ * Scale buffer with custom transparent color
+ *
+ * # Safety
+ * Same as Platform_Buffer_Scale
+ */
+void Platform_Buffer_ScaleTransKey(uint8_t *dest,
+                                   int32_t dest_pitch,
+                                   int32_t dest_width,
+                                   int32_t dest_height,
+                                   const uint8_t *src,
+                                   int32_t src_pitch,
+                                   int32_t src_width,
+                                   int32_t src_height,
+                                   int32_t dest_x,
+                                   int32_t dest_y,
+                                   int32_t scale_width,
+                                   int32_t scale_height,
+                                   uint8_t transparent_color);
+
+/**
+ * Apply shadow to rectangular region
+ *
+ * # Safety
+ * - `buffer` must point to valid memory
+ * - `shadow_table` must point to exactly 256 bytes
+ */
+void Platform_Buffer_Shadow(uint8_t *buffer,
+                            int32_t pitch,
+                            int32_t x,
+                            int32_t y,
+                            int32_t width,
+                            int32_t height,
+                            const uint8_t *shadow_table);
+
+/**
+ * Apply shadow using mask sprite
+ *
+ * # Safety
+ * - `buffer` must point to valid memory
+ * - `mask` must point to valid memory of at least `mask_pitch * height` bytes
+ * - `shadow_table` must point to exactly 256 bytes
+ */
+void Platform_Buffer_ShadowMask(uint8_t *buffer,
+                                int32_t buffer_pitch,
+                                int32_t buffer_width,
+                                int32_t buffer_height,
+                                const uint8_t *mask,
+                                int32_t mask_pitch,
+                                int32_t x,
+                                int32_t y,
+                                int32_t width,
+                                int32_t height,
+                                const uint8_t *shadow_table);
+
+/**
+ * Generate shadow lookup table from palette
+ *
+ * # Safety
+ * - `palette` must point to 768 bytes (256 RGB triplets)
+ * - `shadow_table` must point to 256 bytes for output
+ */
+void Platform_GenerateShadowTable(const uint8_t *palette, uint8_t *shadow_table, float intensity);
+
+/**
+ * Decompress LCW-encoded data
+ *
+ * # Arguments
+ * * `source` - Pointer to compressed data
+ * * `source_size` - Size of compressed data
+ * * `dest` - Pointer to output buffer
+ * * `dest_size` - Size of output buffer
+ *
+ * # Returns
+ * Number of bytes written, or -1 on error
+ *
+ * # Safety
+ * - `source` must point to valid memory of at least `source_size` bytes
+ * - `dest` must point to valid memory of at least `dest_size` bytes
+ */
+int32_t Platform_LCW_Decompress(const uint8_t *source,
+                                int32_t source_size,
+                                uint8_t *dest,
+                                int32_t dest_size);
+
+/**
+ * Compress data using LCW algorithm
+ *
+ * # Arguments
+ * * `source` - Pointer to uncompressed data
+ * * `source_size` - Size of uncompressed data
+ * * `dest` - Pointer to output buffer
+ * * `dest_size` - Size of output buffer
+ *
+ * # Returns
+ * Number of bytes written, or -1 on error
+ *
+ * # Safety
+ * - `source` must point to valid memory of at least `source_size` bytes
+ * - `dest` must point to valid memory of at least `dest_size` bytes
+ */
+int32_t Platform_LCW_Compress(const uint8_t *source,
+                              int32_t source_size,
+                              uint8_t *dest,
+                              int32_t dest_size);
+
+/**
+ * Calculate maximum compressed size for given input size
+ *
+ * Use this to allocate output buffer for compression.
+ */
+int32_t Platform_LCW_MaxCompressedSize(int32_t uncompressed_size);
+
+/**
+ * Calculate CRC32 of data
+ *
+ * # Safety
+ * - `data` must point to valid memory of at least `size` bytes
+ */
+uint32_t Platform_CRC32(const uint8_t *data, int32_t size);
+
+/**
+ * Update CRC32 with more data (for streaming)
+ *
+ * # Arguments
+ * * `crc` - Previous CRC value (use 0xFFFFFFFF for first call)
+ * * `data` - Pointer to data
+ * * `size` - Size of data
+ *
+ * # Returns
+ * Updated CRC (call Platform_CRC32_Finalize when done)
+ *
+ * # Safety
+ * - `data` must point to valid memory of at least `size` bytes
+ */
+uint32_t Platform_CRC32_Update(uint32_t crc_val, const uint8_t *data, int32_t size);
+
+/**
+ * Finalize CRC32 calculation
+ *
+ * XORs with 0xFFFFFFFF to produce final value.
+ */
+uint32_t Platform_CRC32_Finalize(uint32_t crc_val);
+
+/**
+ * Get initial CRC32 value for streaming
+ */
+uint32_t Platform_CRC32_Init(void);
+
+/**
+ * Seed the global random number generator
+ */
+void Platform_Random_Seed(uint32_t seed);
+
+/**
+ * Get the current random seed
+ */
+uint32_t Platform_Random_GetSeed(void);
+
+/**
+ * Get next random number (0-32767)
+ */
+uint32_t Platform_Random_Get(void);
+
+/**
+ * Get random number in range [min, max]
+ */
+int32_t Platform_Random_Range(int32_t min, int32_t max);
+
+/**
+ * Get random number in range [0, max)
+ */
+uint32_t Platform_Random_Max(uint32_t max);
 
 #ifdef __cplusplus
 } // extern "C"
