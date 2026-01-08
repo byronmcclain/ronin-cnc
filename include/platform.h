@@ -39,6 +39,23 @@
 #define DEFAULT_SHADOW_INTENSITY 0.5
 
 /**
+ * Maximum key length in bytes
+ */
+#define BlowfishEngine_MAX_KEY_LENGTH 56
+
+/**
+ * Block size in bytes
+ */
+#define BlowfishEngine_BLOCK_SIZE 8
+
+/**
+ * RSA block sizes for Westwood's key
+ */
+#define RSA_PLAIN_BLOCK_SIZE 39
+
+#define RSA_CRYPT_BLOCK_SIZE 40
+
+/**
  * Magic number for packet validation
  * Original: 0xDABD for serial, various for network
  */
