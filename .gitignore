@@ -23,3 +23,7 @@ compile_commands.json
 # Ralph loop state
 .claude/
 **/.claude/
+
+# Extracted CD contents (too large)
+gamedata/CD1/
+gamedata/CD2/
