@@ -161,7 +161,7 @@ void test_shape_loading() {
     }
 
     // Load shape from memory
-    void* shape = Platform_Shape_LoadFromMemory(shp_data, sizeof(shp_data));
+    PlatformShape* shape = Platform_Shape_LoadFromMemory(shp_data, sizeof(shp_data));
     TEST_ASSERT(shape != nullptr, "Shape loaded from memory");
 
     if (shape) {
@@ -200,7 +200,7 @@ void test_template_loading() {
     }
 
     // Load template from memory
-    void* tmpl = Platform_Template_LoadFromMemory(tile_data, sizeof(tile_data), 4, 4);
+    PlatformTemplate* tmpl = Platform_Template_LoadFromMemory(tile_data, sizeof(tile_data), 4, 4);
     TEST_ASSERT(tmpl != nullptr, "Template loaded from memory");
 
     if (tmpl) {

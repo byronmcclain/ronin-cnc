@@ -2409,7 +2409,7 @@ static MIX_MANAGER: once_cell::sync::Lazy<RwLock<MixManager>> =
 #[no_mangle]
 pub extern "C" fn Platform_Assets_Init() -> i32 {
     // Force initialization of the lazy static
-    let _ = MIX_MANAGER.read();
+    let _guard = MIX_MANAGER.read();
     0
 }
 

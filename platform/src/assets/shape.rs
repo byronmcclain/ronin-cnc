@@ -180,7 +180,7 @@ impl ShapeFile {
 
         // Decode frames
         let frame_size = width as usize * height as usize;
-        let mut frames = Vec::with_capacity(frame_count);
+        let mut frames: Vec<ShapeFrame> = Vec::with_capacity(frame_count);
 
         for (frame_idx, frame_offset) in offsets.iter().enumerate() {
             let frame = if frame_offset.offset == 0 {
