@@ -195,7 +195,41 @@ if(APPLE)
     )
 endif()
 
+# =============================================================================
+# Asset System Integration Test (Phase 12)
+# =============================================================================
+
+add_executable(TestAssets src/test_assets.cpp)
+
+target_include_directories(TestAssets PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+add_dependencies(TestAssets generate_headers)
+
+target_link_libraries(TestAssets PRIVATE redalert_platform)
+
+if(APPLE)
+    target_link_libraries(TestAssets PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
 # Enable testing
 enable_testing()
 add_test(NAME PlatformTests COMMAND TestPlatform)
 add_test(NAME PlatformQuickTests COMMAND TestPlatform --quick)
+add_test(NAME AssetTests COMMAND TestAssets)

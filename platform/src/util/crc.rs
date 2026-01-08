@@ -2,7 +2,9 @@
 //!
 //! Replaces WIN32LIB/MISC/CRC.ASM
 //!
-//! Uses the standard CRC32 polynomial 0xEDB88320 (IEEE 802.3)
+//! This module provides two CRC algorithms:
+//! 1. Standard IEEE CRC32 (for network sync, file validation)
+//! 2. Westwood CRC (rotate-and-add, for MIX file lookups)
 
 use once_cell::sync::Lazy;
 
@@ -110,6 +112,153 @@ impl Default for Crc32 {
 }
 
 // =============================================================================
+// Westwood CRC (Rotate-and-Add)
+// =============================================================================
+//
+// This is Westwood Studios' custom hash algorithm used for MIX file lookups.
+// It is NOT a true CRC - it's a faster rotate-and-add checksum.
+//
+// Algorithm (from CODE/CRC.H and CODE/CRC.CPP):
+// 1. Process data in 4-byte chunks
+// 2. For each chunk: CRC = rotate_left(CRC, 1) + chunk
+// 3. Handle remaining bytes with partial accumulation
+//
+// The filename is converted to uppercase before hashing.
+// The result is a signed 32-bit integer used as a key in binary search.
+
+/// Calculate Westwood CRC of a byte slice.
+///
+/// This is the rotate-and-add algorithm used by MIX files for filename hashing.
+/// The algorithm processes data in 32-bit chunks with left rotation.
+///
+/// # Arguments
+/// * `data` - Byte slice to hash
+///
+/// # Returns
+/// 32-bit hash value (can be interpreted as signed for binary search)
+pub fn westwood_crc(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0;
+    let mut staging: u32 = 0;
+    let mut index: usize = 0;
+    let mut bytes_remaining = data.len();
+    let mut data_ptr = 0;
+
+    // Process leading bytes until we're aligned to 4-byte boundary
+    // Also handles case where total data < 4 bytes
+    while bytes_remaining > 0 && index < 4 {
+        staging |= (data[data_ptr] as u32) << (index * 8);
+        index += 1;
+        data_ptr += 1;
+        bytes_remaining -= 1;
+
+        if index == 4 {
+            crc = crc.rotate_left(1).wrapping_add(staging);
+            staging = 0;
+            index = 0;
+        }
+    }
+
+    // Process 4-byte chunks
+    while bytes_remaining >= 4 {
+        let chunk = u32::from_le_bytes([
+            data[data_ptr],
+            data[data_ptr + 1],
+            data[data_ptr + 2],
+            data[data_ptr + 3],
+        ]);
+        crc = crc.rotate_left(1).wrapping_add(chunk);
+        data_ptr += 4;
+        bytes_remaining -= 4;
+    }
+
+    // Handle remaining bytes (< 4)
+    while bytes_remaining > 0 {
+        staging |= (data[data_ptr] as u32) << (index * 8);
+        index += 1;
+        data_ptr += 1;
+        bytes_remaining -= 1;
+    }
+
+    // If there are any remaining bytes in staging buffer, incorporate them
+    if index > 0 {
+        crc = crc.rotate_left(1).wrapping_add(staging);
+    }
+
+    crc
+}
+
+/// Calculate Westwood CRC of an uppercase ASCII string.
+///
+/// This is the typical usage for MIX file lookups - the filename
+/// is converted to uppercase before hashing.
+///
+/// # Arguments
+/// * `name` - Filename string (will be uppercased)
+///
+/// # Returns
+/// 32-bit hash value for MIX file lookup
+pub fn westwood_crc_filename(name: &str) -> u32 {
+    let upper = name.to_ascii_uppercase();
+    westwood_crc(upper.as_bytes())
+}
+
+/// Streaming Westwood CRC calculator
+///
+/// Maintains state for incremental hash computation.
+pub struct WestwoodCrc {
+    crc: u32,
+    staging: u32,
+    index: usize,
+}
+
+impl WestwoodCrc {
+    /// Create new Westwood CRC calculator
+    pub fn new() -> Self {
+        Self {
+            crc: 0,
+            staging: 0,
+            index: 0,
+        }
+    }
+
+    /// Update with more data
+    pub fn update(&mut self, data: &[u8]) {
+        for &byte in data {
+            self.staging |= (byte as u32) << (self.index * 8);
+            self.index += 1;
+
+            if self.index == 4 {
+                self.crc = self.crc.rotate_left(1).wrapping_add(self.staging);
+                self.staging = 0;
+                self.index = 0;
+            }
+        }
+    }
+
+    /// Get current hash value (finalizes any pending bytes)
+    pub fn finalize(&self) -> u32 {
+        if self.index > 0 {
+            self.crc.rotate_left(1).wrapping_add(self.staging)
+        } else {
+            self.crc
+        }
+    }
+
+    /// Reset to initial state
+    pub fn reset(&mut self) {
+        self.crc = 0;
+        self.staging = 0;
+        self.index = 0;
+    }
+}
+
+impl Default for WestwoodCrc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// =============================================================================
 // Unit Tests
 // =============================================================================
 
@@ -185,5 +334,119 @@ mod tests {
 
         // Verify it's consistent (not checking specific value)
         assert_eq!(crc, crc32(&data));
+    }
+
+    // =========================================================================
+    // Westwood CRC Tests
+    // =========================================================================
+
+    #[test]
+    fn test_westwood_crc_empty() {
+        let crc = westwood_crc(&[]);
+        assert_eq!(crc, 0);
+    }
+
+    #[test]
+    fn test_westwood_crc_single_byte() {
+        // Single byte 'A' (0x41) should produce 0x41 rotated left 1 = 0x82
+        let crc = westwood_crc(b"A");
+        assert_eq!(crc, 0x82);
+    }
+
+    #[test]
+    fn test_westwood_crc_four_bytes() {
+        // "TEST" = 0x54455354 (little endian: T=0x54, E=0x45, S=0x53, T=0x54)
+        // As u32 LE: 0x54534554
+        // rotate_left(0, 1) + 0x54534554 = 0x54534554
+        let crc = westwood_crc(b"TEST");
+        let expected = u32::from_le_bytes([b'T', b'E', b'S', b'T']);
+        assert_eq!(crc, expected);
+    }
+
+    #[test]
+    fn test_westwood_crc_eight_bytes() {
+        // Two 4-byte chunks
+        let crc = westwood_crc(b"TESTDATA");
+
+        // First chunk: "TEST" = 0x54534554
+        // After: crc = rotate_left(0, 1) + 0x54534554 = 0x54534554
+        // Second chunk: "DATA" = 0x41544144
+        // After: crc = rotate_left(0x54534554, 1) + 0x41544144
+        //            = 0xA8A68AA8 + 0x41544144
+
+        let chunk1 = u32::from_le_bytes([b'T', b'E', b'S', b'T']);
+        let chunk2 = u32::from_le_bytes([b'D', b'A', b'T', b'A']);
+        let expected = chunk1.rotate_left(1).wrapping_add(chunk2);
+
+        assert_eq!(crc, expected);
+    }
+
+    #[test]
+    fn test_westwood_crc_filename() {
+        // Test case-insensitive filename hashing
+        let crc_lower = westwood_crc_filename("test.shp");
+        let crc_upper = westwood_crc_filename("TEST.SHP");
+        let crc_mixed = westwood_crc_filename("TeSt.ShP");
+
+        assert_eq!(crc_lower, crc_upper);
+        assert_eq!(crc_lower, crc_mixed);
+    }
+
+    #[test]
+    fn test_westwood_crc_streaming() {
+        let data = b"TESTDATA";
+
+        // One-shot
+        let crc_one = westwood_crc(data);
+
+        // Streaming
+        let mut crc_stream = WestwoodCrc::new();
+        crc_stream.update(b"TEST");
+        crc_stream.update(b"DATA");
+
+        assert_eq!(crc_one, crc_stream.finalize());
+    }
+
+    #[test]
+    fn test_westwood_crc_streaming_unaligned() {
+        let data = b"ABCDEFGHIJ";
+
+        // One-shot
+        let crc_one = westwood_crc(data);
+
+        // Streaming with unaligned chunks
+        let mut crc_stream = WestwoodCrc::new();
+        crc_stream.update(b"ABC");
+        crc_stream.update(b"DEFG");
+        crc_stream.update(b"HI");
+        crc_stream.update(b"J");
+
+        assert_eq!(crc_one, crc_stream.finalize());
+    }
+
+    #[test]
+    fn test_westwood_crc_known_filenames() {
+        // These are well-known Red Alert asset filenames
+        // The actual CRC values should match the original game's lookup table
+
+        // Verify consistency - same input always produces same output
+        let crc1 = westwood_crc_filename("CONQUER.MIX");
+        let crc2 = westwood_crc_filename("CONQUER.MIX");
+        assert_eq!(crc1, crc2);
+
+        // Different files should have different hashes (usually)
+        let crc_a = westwood_crc_filename("PALETTE.PAL");
+        let crc_b = westwood_crc_filename("SHADOW.PAL");
+        assert_ne!(crc_a, crc_b);
+    }
+
+    #[test]
+    fn test_westwood_crc_reset() {
+        let mut crc = WestwoodCrc::new();
+        crc.update(b"garbage");
+        crc.reset();
+        crc.update(b"TEST");
+
+        assert_eq!(crc.finalize(), westwood_crc(b"TEST"));
     }
 }

@@ -2317,6 +2317,46 @@ pub extern "C" fn Platform_CRC32_Init() -> u32 {
 }
 
 // =============================================================================
+// Westwood CRC FFI (for MIX file filename hashing)
+// =============================================================================
+
+/// Calculate Westwood CRC (rotate-and-add hash) for MIX file lookups.
+///
+/// This is NOT a standard CRC - it's Westwood's custom filename hash algorithm.
+/// The result is used to look up files in MIX archives via binary search.
+///
+/// # Safety
+/// - `data` must point to valid memory of at least `size` bytes
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Westwood_CRC(data: *const u8, size: i32) -> u32 {
+    if data.is_null() || size <= 0 {
+        return 0;
+    }
+
+    let slice = std::slice::from_raw_parts(data, size as usize);
+    crc::westwood_crc(slice)
+}
+
+/// Calculate Westwood CRC for a filename string.
+///
+/// The filename is automatically converted to uppercase before hashing,
+/// as MIX files use case-insensitive lookups.
+///
+/// # Safety
+/// - `filename` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Westwood_CRC_Filename(filename: *const c_char) -> u32 {
+    if filename.is_null() {
+        return 0;
+    }
+
+    match CStr::from_ptr(filename).to_str() {
+        Ok(s) => crc::westwood_crc_filename(s),
+        Err(_) => 0,
+    }
+}
+
+// =============================================================================
 // Random FFI (replaces RANDOM.ASM)
 // =============================================================================
 
@@ -2348,4 +2388,612 @@ pub extern "C" fn Platform_Random_Range(min: i32, max: i32) -> i32 {
 #[no_mangle]
 pub extern "C" fn Platform_Random_Max(max: u32) -> u32 {
     random::next_max(max)
+}
+
+// =============================================================================
+// MIX File Asset System FFI
+// =============================================================================
+
+use crate::assets::{MixManager, ShapeFile, TemplateFile};
+use crate::assets::mix::MixError;
+use crate::assets::palette::Palette as AssetPalette;
+use std::sync::RwLock;
+
+/// Global MIX manager instance
+static MIX_MANAGER: once_cell::sync::Lazy<RwLock<MixManager>> =
+    once_cell::sync::Lazy::new(|| RwLock::new(MixManager::new()));
+
+/// Initialize the asset system
+///
+/// This is optional - the MIX manager is initialized lazily.
+#[no_mangle]
+pub extern "C" fn Platform_Assets_Init() -> i32 {
+    // Force initialization of the lazy static
+    let _ = MIX_MANAGER.read();
+    0
+}
+
+/// Register a MIX file with the asset system
+///
+/// # Safety
+/// - `path` must be a valid null-terminated C string
+///
+/// # Returns
+/// - 0 on success
+/// - -1 on error (file not found, invalid format, etc.)
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Mix_Register(path: *const c_char) -> i32 {
+    if path.is_null() {
+        return -1;
+    }
+
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    match MIX_MANAGER.write() {
+        Ok(mut manager) => {
+            match manager.register(path_str) {
+                Ok(_) => 0,
+                Err(e) => {
+                    set_error(e.to_string());
+                    -1
+                }
+            }
+        }
+        Err(_) => -1,
+    }
+}
+
+/// Register and cache a MIX file
+///
+/// # Safety
+/// - `path` must be a valid null-terminated C string
+///
+/// # Returns
+/// - 0 on success
+/// - -1 on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Mix_RegisterAndCache(path: *const c_char) -> i32 {
+    if path.is_null() {
+        return -1;
+    }
+
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    match MIX_MANAGER.write() {
+        Ok(mut manager) => {
+            match manager.register_and_cache(path_str) {
+                Ok(_) => 0,
+                Err(e) => {
+                    set_error(e.to_string());
+                    -1
+                }
+            }
+        }
+        Err(_) => -1,
+    }
+}
+
+/// Unregister a MIX file
+///
+/// # Safety
+/// - `path` must be a valid null-terminated C string
+///
+/// # Returns
+/// - 1 if found and removed
+/// - 0 if not found
+/// - -1 on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Mix_Unregister(path: *const c_char) -> i32 {
+    if path.is_null() {
+        return -1;
+    }
+
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    match MIX_MANAGER.write() {
+        Ok(mut manager) => {
+            if manager.unregister(path_str) { 1 } else { 0 }
+        }
+        Err(_) => -1,
+    }
+}
+
+/// Check if a file exists in any registered MIX
+///
+/// # Safety
+/// - `filename` must be a valid null-terminated C string
+///
+/// # Returns
+/// - 1 if file exists
+/// - 0 if not found
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Mix_Exists(filename: *const c_char) -> i32 {
+    if filename.is_null() {
+        return 0;
+    }
+
+    let name_str = match CStr::from_ptr(filename).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    match MIX_MANAGER.read() {
+        Ok(manager) => {
+            if manager.exists(name_str) { 1 } else { 0 }
+        }
+        Err(_) => 0,
+    }
+}
+
+/// Read file data from MIX archives
+///
+/// The data is copied to the provided buffer.
+///
+/// # Safety
+/// - `filename` must be a valid null-terminated C string
+/// - `buffer` must point to at least `buffer_size` bytes
+///
+/// # Returns
+/// - Number of bytes read on success
+/// - 0 if file not found
+/// - -1 on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Mix_Read(
+    filename: *const c_char,
+    buffer: *mut u8,
+    buffer_size: i32,
+) -> i32 {
+    if filename.is_null() || buffer.is_null() || buffer_size <= 0 {
+        return -1;
+    }
+
+    let name_str = match CStr::from_ptr(filename).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    match MIX_MANAGER.read() {
+        Ok(manager) => {
+            match manager.read(name_str) {
+                Ok(data) => {
+                    let copy_len = std::cmp::min(data.len(), buffer_size as usize);
+                    std::ptr::copy_nonoverlapping(data.as_ptr(), buffer, copy_len);
+                    copy_len as i32
+                }
+                Err(MixError::FileNotFound(_)) => 0,
+                Err(e) => {
+                    set_error(e.to_string());
+                    -1
+                }
+            }
+        }
+        Err(_) => -1,
+    }
+}
+
+/// Get the size of a file in MIX archives
+///
+/// # Safety
+/// - `filename` must be a valid null-terminated C string
+///
+/// # Returns
+/// - File size in bytes on success
+/// - 0 if not found
+/// - -1 on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Mix_GetSize(filename: *const c_char) -> i32 {
+    if filename.is_null() {
+        return -1;
+    }
+
+    let name_str = match CStr::from_ptr(filename).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    match MIX_MANAGER.read() {
+        Ok(manager) => {
+            match manager.find(name_str) {
+                Some((_, entry)) => entry.size as i32,
+                None => 0,
+            }
+        }
+        Err(_) => -1,
+    }
+}
+
+/// Get number of registered MIX files
+#[no_mangle]
+pub extern "C" fn Platform_Mix_GetCount() -> i32 {
+    match MIX_MANAGER.read() {
+        Ok(manager) => manager.mix_count() as i32,
+        Err(_) => 0,
+    }
+}
+
+// =============================================================================
+// Palette Loading FFI
+// =============================================================================
+
+/// Load a palette from raw PAL data
+///
+/// PAL data uses 6-bit color values (0-63), which are shifted to 8-bit (0-252).
+///
+/// # Safety
+/// - `pal_data` must point to exactly 768 bytes
+/// - `output` must point to 768 bytes (256 × 3 RGB)
+///
+/// # Returns
+/// - 0 on success
+/// - -1 on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Palette_LoadPAL(
+    pal_data: *const u8,
+    output: *mut u8,
+) -> i32 {
+    if pal_data.is_null() || output.is_null() {
+        return -1;
+    }
+
+    let input = std::slice::from_raw_parts(pal_data, 768);
+
+    match AssetPalette::from_pal_data(input) {
+        Ok(palette) => {
+            let rgb = palette.to_rgb_bytes();
+            std::ptr::copy_nonoverlapping(rgb.as_ptr(), output, 768);
+            0
+        }
+        Err(e) => {
+            set_error(e.to_string());
+            -1
+        }
+    }
+}
+
+/// Load a palette from a file in MIX archives
+///
+/// # Safety
+/// - `filename` must be a valid null-terminated C string
+/// - `output` must point to 768 bytes (256 × 3 RGB)
+///
+/// # Returns
+/// - 0 on success
+/// - -1 on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Palette_Load(
+    filename: *const c_char,
+    output: *mut u8,
+) -> i32 {
+    if filename.is_null() || output.is_null() {
+        return -1;
+    }
+
+    let name_str = match CStr::from_ptr(filename).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    match MIX_MANAGER.read() {
+        Ok(manager) => {
+            match manager.read(name_str) {
+                Ok(data) => {
+                    if data.len() != 768 {
+                        set_error(format!("Invalid palette size: {}", data.len()));
+                        return -1;
+                    }
+
+                    match AssetPalette::from_pal_data(&data) {
+                        Ok(palette) => {
+                            let rgb = palette.to_rgb_bytes();
+                            std::ptr::copy_nonoverlapping(rgb.as_ptr(), output, 768);
+                            0
+                        }
+                        Err(e) => {
+                            set_error(e.to_string());
+                            -1
+                        }
+                    }
+                }
+                Err(e) => {
+                    set_error(e.to_string());
+                    -1
+                }
+            }
+        }
+        Err(_) => -1,
+    }
+}
+
+// =============================================================================
+// Shape File FFI
+// =============================================================================
+
+/// Opaque handle to a loaded shape file
+pub struct PlatformShape {
+    inner: ShapeFile,
+}
+
+/// Load a shape file from MIX archives
+///
+/// # Safety
+/// - `filename` must be a valid null-terminated C string
+///
+/// # Returns
+/// - Pointer to loaded shape on success
+/// - null on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Shape_Load(filename: *const c_char) -> *mut PlatformShape {
+    if filename.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let name_str = match CStr::from_ptr(filename).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    match MIX_MANAGER.read() {
+        Ok(manager) => {
+            match manager.read(name_str) {
+                Ok(data) => {
+                    match ShapeFile::from_data(&data) {
+                        Ok(shape) => {
+                            Box::into_raw(Box::new(PlatformShape { inner: shape }))
+                        }
+                        Err(e) => {
+                            set_error(e.to_string());
+                            std::ptr::null_mut()
+                        }
+                    }
+                }
+                Err(e) => {
+                    set_error(e.to_string());
+                    std::ptr::null_mut()
+                }
+            }
+        }
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Load a shape file from raw data
+///
+/// # Safety
+/// - `data` must point to at least `size` bytes
+///
+/// # Returns
+/// - Pointer to loaded shape on success
+/// - null on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Shape_LoadFromMemory(
+    data: *const u8,
+    size: i32,
+) -> *mut PlatformShape {
+    if data.is_null() || size <= 0 {
+        return std::ptr::null_mut();
+    }
+
+    let slice = std::slice::from_raw_parts(data, size as usize);
+
+    match ShapeFile::from_data(slice) {
+        Ok(shape) => {
+            Box::into_raw(Box::new(PlatformShape { inner: shape }))
+        }
+        Err(e) => {
+            set_error(e.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Free a loaded shape file
+///
+/// # Safety
+/// - `shape` must be a valid pointer from Platform_Shape_Load/LoadFromMemory
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Shape_Free(shape: *mut PlatformShape) {
+    if !shape.is_null() {
+        drop(Box::from_raw(shape));
+    }
+}
+
+/// Get shape dimensions
+///
+/// # Safety
+/// - `shape` must be a valid shape pointer
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Shape_GetSize(
+    shape: *const PlatformShape,
+    width: *mut i32,
+    height: *mut i32,
+) {
+    if shape.is_null() {
+        return;
+    }
+
+    let s = &(*shape).inner;
+    if !width.is_null() {
+        *width = s.width as i32;
+    }
+    if !height.is_null() {
+        *height = s.height as i32;
+    }
+}
+
+/// Get number of frames in a shape
+///
+/// # Safety
+/// - `shape` must be a valid shape pointer
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Shape_GetFrameCount(shape: *const PlatformShape) -> i32 {
+    if shape.is_null() {
+        return 0;
+    }
+
+    (*shape).inner.frame_count() as i32
+}
+
+/// Get frame pixel data
+///
+/// Copies frame pixels to the provided buffer.
+///
+/// # Safety
+/// - `shape` must be a valid shape pointer
+/// - `buffer` must point to at least width * height bytes
+///
+/// # Returns
+/// - Number of bytes copied on success
+/// - 0 if frame index is invalid
+/// - -1 on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Shape_GetFrame(
+    shape: *const PlatformShape,
+    frame_index: i32,
+    buffer: *mut u8,
+    buffer_size: i32,
+) -> i32 {
+    if shape.is_null() || buffer.is_null() || buffer_size <= 0 {
+        return -1;
+    }
+
+    let s = &(*shape).inner;
+
+    match s.frame(frame_index as usize) {
+        Some(frame) => {
+            let copy_len = std::cmp::min(frame.pixels.len(), buffer_size as usize);
+            std::ptr::copy_nonoverlapping(frame.pixels.as_ptr(), buffer, copy_len);
+            copy_len as i32
+        }
+        None => 0,
+    }
+}
+
+// =============================================================================
+// Template File FFI
+// =============================================================================
+
+/// Opaque handle to a loaded template file
+pub struct PlatformTemplate {
+    inner: TemplateFile,
+}
+
+/// Load a template file from raw data
+///
+/// # Safety
+/// - `data` must point to at least `size` bytes
+///
+/// # Returns
+/// - Pointer to loaded template on success
+/// - null on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Template_LoadFromMemory(
+    data: *const u8,
+    size: i32,
+    tile_width: i32,
+    tile_height: i32,
+) -> *mut PlatformTemplate {
+    if data.is_null() || size <= 0 || tile_width <= 0 || tile_height <= 0 {
+        return std::ptr::null_mut();
+    }
+
+    let slice = std::slice::from_raw_parts(data, size as usize);
+
+    match TemplateFile::from_data(slice, tile_width as u16, tile_height as u16) {
+        Ok(template) => {
+            Box::into_raw(Box::new(PlatformTemplate { inner: template }))
+        }
+        Err(e) => {
+            set_error(e.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Free a loaded template file
+///
+/// # Safety
+/// - `template` must be a valid pointer from Platform_Template_LoadFromMemory
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Template_Free(template: *mut PlatformTemplate) {
+    if !template.is_null() {
+        drop(Box::from_raw(template));
+    }
+}
+
+/// Get number of tiles in a template
+///
+/// # Safety
+/// - `template` must be a valid template pointer
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Template_GetTileCount(template: *const PlatformTemplate) -> i32 {
+    if template.is_null() {
+        return 0;
+    }
+
+    (*template).inner.tile_count() as i32
+}
+
+/// Get tile dimensions
+///
+/// # Safety
+/// - `template` must be a valid template pointer
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Template_GetTileSize(
+    template: *const PlatformTemplate,
+    width: *mut i32,
+    height: *mut i32,
+) {
+    if template.is_null() {
+        return;
+    }
+
+    let t = &(*template).inner;
+    if !width.is_null() {
+        *width = t.tile_width as i32;
+    }
+    if !height.is_null() {
+        *height = t.tile_height as i32;
+    }
+}
+
+/// Get tile pixel data
+///
+/// # Safety
+/// - `template` must be a valid template pointer
+/// - `buffer` must point to at least tile_width * tile_height bytes
+///
+/// # Returns
+/// - Number of bytes copied on success
+/// - 0 if tile index is invalid
+/// - -1 on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Template_GetTile(
+    template: *const PlatformTemplate,
+    tile_index: i32,
+    buffer: *mut u8,
+    buffer_size: i32,
+) -> i32 {
+    if template.is_null() || buffer.is_null() || buffer_size <= 0 {
+        return -1;
+    }
+
+    let t = &(*template).inner;
+
+    match t.tile(tile_index as usize) {
+        Some(tile) => {
+            let copy_len = std::cmp::min(tile.pixels.len(), buffer_size as usize);
+            std::ptr::copy_nonoverlapping(tile.pixels.as_ptr(), buffer, copy_len);
+            copy_len as i32
+        }
+        None => 0,
+    }
 }

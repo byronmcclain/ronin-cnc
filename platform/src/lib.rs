@@ -8,6 +8,7 @@ use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
 pub mod app;
+pub mod assets;
 pub mod audio;
 pub mod blit;
 pub mod compression;
