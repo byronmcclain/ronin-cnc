@@ -3,32 +3,21 @@
 ## Dependencies
 - Task 12b (MIX Header) must be complete
 - Task 12c (MIX Lookup) must be complete
+- Platform file I/O functions available
 
 ## Context
-
-Most Red Alert MIX files use encryption to protect the file index (header). The encryption scheme combines RSA and Blowfish:
-- A 56-byte Blowfish key is RSA-encrypted and stored at the start of the file
-- The file header (count, size, entries) is Blowfish-encrypted
-- The actual file data is NOT encrypted, only the index
-
-Without decryption support, we can only load 2 of 20 MIX files:
-- `AUD.MIX` - Audio (unencrypted)
-- `SETUP.MIX` - Setup assets (unencrypted)
-
-All other files including `REDALERT.MIX`, theater files, and campaign files are encrypted.
+Most Red Alert MIX files (18 of 20) use Blowfish encryption on their headers. Without decryption, we can only load AUD.MIX and SETUP.MIX. This task implements the crypto primitives needed to decrypt REDALERT.MIX and all theater/campaign files.
 
 ## Objective
-
-Implement Blowfish and RSA decryption to enable loading encrypted MIX files:
-1. Port Blowfish cipher from original Westwood code (GPL licensed)
-2. Implement RSA decryption using the known public key
-3. Modify `MixFile` to decrypt headers when encryption flag is set
-4. Verify by loading `REDALERT.MIX` and listing files
+Implement Blowfish and RSA decryption in Rust to enable loading encrypted MIX files:
+1. Port Blowfish cipher from Westwood's GPL-licensed code
+2. Implement RSA decryption using Westwood's known public key
+3. Modify `MixFile` to automatically decrypt encrypted headers
+4. Verify by successfully loading REDALERT.MIX
 
 ## Technical Background
 
 ### Encrypted MIX File Layout
-
 ```
 Offset   Size    Description
 ------   ----    -----------
@@ -39,93 +28,49 @@ Offset   Size    Description
                    - 2 bytes: file count
                    - 4 bytes: total data size
                    - 12*N bytes: SubBlock entries
-                 Padding added to align to 8-byte Blowfish blocks
+                 (padded to 8-byte Blowfish block boundary)
 ???      ...     Unencrypted file data section
 ```
 
-### RSA Public Key (Hardcoded in Original Game)
-
+### Westwood Public Key
 From `CODE/CONST.CPP`:
 ```cpp
-char const Keys[] =
 "[PublicKey]\n"
 "1=AihRvNoIbTn85FZRYNZRcT+i6KpU+maCsEqr3Q5q+LDB5tH7Tz2qQ38V\n"
 ```
+- **Modulus**: Base64-decoded ~40-byte big integer
+- **Exponent**: 65537 (0x10001) - standard RSA public exponent
 
-Key parameters:
-- **Modulus (n)**: Base64-encoded big integer from the string above
-- **Exponent (e)**: 65537 (0x10001) - standard RSA public exponent
-
-The Base64 string decodes to a ~40-byte big integer representing the modulus.
-
-### Blowfish Algorithm Details
-
+### Blowfish Algorithm
 From `CODE/BLOWFISH.H`:
-```cpp
-class BlowfishEngine {
-    enum {
-        MAX_KEY_LENGTH = 56,      // Maximum key is 56 bytes (448 bits)
-        ROUNDS = 16,              // 16 Feistel rounds
-        BYTES_PER_BLOCK = 8       // 64-bit blocks
-    };
-
-    unsigned long P_Encrypt[ROUNDS+2];  // 18 P-box values
-    unsigned long P_Decrypt[ROUNDS+2];
-    unsigned long bf_S[4][256];         // 4 S-boxes, 256 entries each
-};
-```
-
-Key characteristics:
-- Block cipher with 64-bit (8-byte) blocks
+- Block size: 64 bits (8 bytes)
 - Key length: 1-56 bytes
-- Uses Feistel network with 16 rounds
-- P-box and S-box initialized from digits of Pi
+- Rounds: 16 Feistel rounds
+- P-box: 18 entries initialized from Pi
+- S-boxes: 4 boxes × 256 entries each
 
 ### Decryption Flow
-
-1. **Read file header**:
-   ```
-   Read 4 bytes -> check for 0x0000 marker
-   If marker found and flag & 0x02 -> encrypted
-   ```
-
-2. **Decrypt Blowfish key**:
-   ```
-   Read 80 bytes of RSA-encrypted key data
-   RSA decrypt using public key -> 56-byte Blowfish key
-   ```
-
-3. **Decrypt header**:
-   ```
-   Initialize Blowfish with decrypted key
-   Read encrypted header (multiple of 8 bytes)
-   Decrypt to get: file_count, data_size, entries[]
-   ```
-
-4. **Data section is unencrypted**:
-   ```
-   File offsets in entries point to raw data
-   No decryption needed for actual file contents
-   ```
+1. Read 4-byte header, check for 0x0000 marker and 0x02 flag
+2. Read 80 bytes of RSA-encrypted key data
+3. RSA decrypt to recover 56-byte Blowfish key
+4. Initialize Blowfish engine with decrypted key
+5. Read and decrypt header (file count, data size, entries)
+6. Data section is NOT encrypted
 
 ## Deliverables
-
-- [ ] `platform/src/crypto/mod.rs` - Crypto module
-- [ ] `platform/src/crypto/blowfish.rs` - Blowfish implementation
-- [ ] `platform/src/crypto/rsa.rs` - RSA decryption (simple implementation)
-- [ ] Modified `platform/src/assets/mix.rs` - Decryption support
+- [ ] `platform/src/crypto/mod.rs` - Crypto module declaration
+- [ ] `platform/src/crypto/blowfish.rs` - Blowfish cipher implementation
+- [ ] `platform/src/crypto/rsa.rs` - RSA decryption with Westwood key
+- [ ] Modified `platform/src/assets/mix.rs` - Decryption integration
 - [ ] `src/test_mix_decrypt.cpp` - Test program
+- [ ] CMake integration for test executable
 - [ ] Verification script passes
 
 ## Files to Create
 
 ### platform/src/crypto/mod.rs (NEW)
-
 ```rust
 //! Cryptographic primitives for MIX file decryption
-//!
-//! Red Alert MIX files use a combination of RSA and Blowfish encryption.
-//! This module implements the minimal subset needed for decryption.
 
 pub mod blowfish;
 pub mod rsa;
@@ -135,42 +80,24 @@ pub use rsa::{RsaPublicKey, WESTWOOD_PUBLIC_KEY};
 ```
 
 ### platform/src/crypto/blowfish.rs (NEW)
-
 ```rust
 //! Blowfish symmetric cipher implementation
 //!
-//! Based on Bruce Schneier's Blowfish algorithm.
-//! Ported from Westwood's GPL-licensed implementation in CODE/BLOWFISH.CPP.
-//!
-//! Blowfish is a Feistel cipher with:
-//! - 64-bit block size
-//! - Variable key length (1-56 bytes)
-//! - 16 rounds
-//! - P-box (18 entries) and S-boxes (4 x 256 entries)
+//! Ported from Westwood's GPL-licensed CODE/BLOWFISH.CPP
 
 /// Blowfish cipher engine
 pub struct BlowfishEngine {
-    /// P-box for encryption (18 values)
     p_encrypt: [u32; 18],
-    /// P-box for decryption (18 values, reversed)
     p_decrypt: [u32; 18],
-    /// S-boxes (4 boxes, 256 entries each)
     s_boxes: [[u32; 256]; 4],
-    /// Whether a key has been set
     is_keyed: bool,
 }
 
 impl BlowfishEngine {
-    /// Maximum key length in bytes (56 bytes = 448 bits)
     pub const MAX_KEY_LENGTH: usize = 56;
-
-    /// Block size in bytes (8 bytes = 64 bits)
     pub const BLOCK_SIZE: usize = 8;
-
-    /// Number of Feistel rounds
     const ROUNDS: usize = 16;
 
-    /// Create a new unkeyed Blowfish engine
     pub fn new() -> Self {
         Self {
             p_encrypt: P_INIT,
@@ -180,18 +107,14 @@ impl BlowfishEngine {
         }
     }
 
-    /// Initialize the engine with a key
-    ///
-    /// # Arguments
-    /// * `key` - Key bytes (1-56 bytes)
+    /// Initialize with key (1-56 bytes)
     pub fn set_key(&mut self, key: &[u8]) {
         assert!(!key.is_empty() && key.len() <= Self::MAX_KEY_LENGTH);
 
-        // Reset to initial values
         self.p_encrypt = P_INIT;
         self.s_boxes = S_INIT;
 
-        // XOR P-box with key (cyclically)
+        // XOR P-box with key cyclically
         let mut key_idx = 0;
         for i in 0..18 {
             let mut data = 0u32;
@@ -202,18 +125,16 @@ impl BlowfishEngine {
             self.p_encrypt[i] ^= data;
         }
 
-        // Encrypt zero block repeatedly to generate P-box and S-boxes
+        // Generate P-box and S-box values by encrypting zeros
         let mut left = 0u32;
         let mut right = 0u32;
 
-        // Generate P-box values
         for i in (0..18).step_by(2) {
             self.encrypt_block(&mut left, &mut right);
             self.p_encrypt[i] = left;
             self.p_encrypt[i + 1] = right;
         }
 
-        // Generate S-box values
         for s in 0..4 {
             for i in (0..256).step_by(2) {
                 self.encrypt_block(&mut left, &mut right);
@@ -222,7 +143,7 @@ impl BlowfishEngine {
             }
         }
 
-        // Create decryption P-box (reversed order)
+        // Create decryption P-box (reversed)
         for i in 0..18 {
             self.p_decrypt[i] = self.p_encrypt[17 - i];
         }
@@ -230,7 +151,6 @@ impl BlowfishEngine {
         self.is_keyed = true;
     }
 
-    /// Encrypt a single 64-bit block in place
     fn encrypt_block(&self, left: &mut u32, right: &mut u32) {
         let mut l = *left;
         let mut r = *right;
@@ -249,7 +169,6 @@ impl BlowfishEngine {
         *right = r;
     }
 
-    /// Decrypt a single 64-bit block in place
     fn decrypt_block(&self, left: &mut u32, right: &mut u32) {
         let mut l = *left;
         let mut r = *right;
@@ -268,7 +187,6 @@ impl BlowfishEngine {
         *right = r;
     }
 
-    /// Feistel function using S-boxes
     #[inline]
     fn feistel(&self, x: u32) -> u32 {
         let a = ((x >> 24) & 0xFF) as usize;
@@ -281,13 +199,7 @@ impl BlowfishEngine {
             .wrapping_add(self.s_boxes[3][d])
     }
 
-    /// Decrypt data in place
-    ///
-    /// # Arguments
-    /// * `data` - Data to decrypt (must be multiple of 8 bytes)
-    ///
-    /// # Returns
-    /// Number of bytes decrypted
+    /// Decrypt data in place (must be multiple of 8 bytes)
     pub fn decrypt(&self, data: &mut [u8]) -> usize {
         if !self.is_keyed || data.len() < Self::BLOCK_SIZE {
             return 0;
@@ -298,7 +210,6 @@ impl BlowfishEngine {
         for i in 0..block_count {
             let offset = i * Self::BLOCK_SIZE;
 
-            // Read block as big-endian u32 pair
             let mut left = u32::from_be_bytes([
                 data[offset], data[offset + 1],
                 data[offset + 2], data[offset + 3]
@@ -309,42 +220,6 @@ impl BlowfishEngine {
             ]);
 
             self.decrypt_block(&mut left, &mut right);
-
-            // Write back as big-endian
-            data[offset..offset + 4].copy_from_slice(&left.to_be_bytes());
-            data[offset + 4..offset + 8].copy_from_slice(&right.to_be_bytes());
-        }
-
-        block_count * Self::BLOCK_SIZE
-    }
-
-    /// Encrypt data in place
-    ///
-    /// # Arguments
-    /// * `data` - Data to encrypt (must be multiple of 8 bytes)
-    ///
-    /// # Returns
-    /// Number of bytes encrypted
-    pub fn encrypt(&self, data: &mut [u8]) -> usize {
-        if !self.is_keyed || data.len() < Self::BLOCK_SIZE {
-            return 0;
-        }
-
-        let block_count = data.len() / Self::BLOCK_SIZE;
-
-        for i in 0..block_count {
-            let offset = i * Self::BLOCK_SIZE;
-
-            let mut left = u32::from_be_bytes([
-                data[offset], data[offset + 1],
-                data[offset + 2], data[offset + 3]
-            ]);
-            let mut right = u32::from_be_bytes([
-                data[offset + 4], data[offset + 5],
-                data[offset + 6], data[offset + 7]
-            ]);
-
-            self.encrypt_block(&mut left, &mut right);
 
             data[offset..offset + 4].copy_from_slice(&left.to_be_bytes());
             data[offset + 4..offset + 8].copy_from_slice(&right.to_be_bytes());
@@ -360,7 +235,7 @@ impl Default for BlowfishEngine {
     }
 }
 
-// Initial P-box values (from digits of Pi)
+// P-box initial values (from digits of Pi)
 const P_INIT: [u32; 18] = [
     0x243f6a88, 0x85a308d3, 0x13198a2e, 0x03707344,
     0xa4093822, 0x299f31d0, 0x082efa98, 0xec4e6c89,
@@ -369,278 +244,18 @@ const P_INIT: [u32; 18] = [
     0x9216d5d9, 0x8979fb1b,
 ];
 
-// Initial S-box values (from digits of Pi)
-// This is a large constant - 4 boxes x 256 entries x 4 bytes = 4096 bytes
-// Values from CODE/BLOWFISH.CPP
+// S-box initial values (from digits of Pi) - 4 boxes x 256 entries
+// Full tables from CODE/BLOWFISH.CPP (4096 bytes total)
 const S_INIT: [[u32; 256]; 4] = [
     // S-box 0
     [
         0xd1310ba6, 0x98dfb5ac, 0x2ffd72db, 0xd01adfb7,
         0xb8e1afed, 0x6a267e96, 0xba7c9045, 0xf12c7f99,
-        0x24a19947, 0xb3916cf7, 0x0801f2e2, 0x858efc16,
-        0x636920d8, 0x71574e69, 0xa458fea3, 0xf4933d7e,
-        0x0d95748f, 0x728eb658, 0x718bcd58, 0x82154aee,
-        0x7b54a41d, 0xc25a59b5, 0x9c30d539, 0x2af26013,
-        0xc5d1b023, 0x286085f0, 0xca417918, 0xb8db38ef,
-        0x8e79dcb0, 0x603a180e, 0x6c9e0e8b, 0xb01e8a3e,
-        0xd71577c1, 0xbd314b27, 0x78af2fda, 0x55605c60,
-        0xe65525f3, 0xaa55ab94, 0x57489862, 0x63e81440,
-        0x55ca396a, 0x2aab10b6, 0xb4cc5c34, 0x1141e8ce,
-        0xa15486af, 0x7c72e993, 0xb3ee1411, 0x636fbc2a,
-        0x2ba9c55d, 0x741831f6, 0xce5c3e16, 0x9b87931e,
-        0xafd6ba33, 0x6c24cf5c, 0x7a325381, 0x28958677,
-        0x3b8f4898, 0x6b4bb9af, 0xc4bfe81b, 0x66282193,
-        0x61d809cc, 0xfb21a991, 0x487cac60, 0x5dec8032,
-        0xef845d5d, 0xe98575b1, 0xdc262302, 0xeb651b88,
-        0x23893e81, 0xd396acc5, 0x0f6d6ff3, 0x83f44239,
-        0x2e0b4482, 0xa4842004, 0x69c8f04a, 0x9e1f9b5e,
-        0x21c66842, 0xf6e96c9a, 0x670c9c61, 0xabd388f0,
-        0x6a51a0d2, 0xd8542f68, 0x960fa728, 0xab5133a3,
-        0x6eef0b6c, 0x137a3be4, 0xba3bf050, 0x7efb2a98,
-        0xa1f1651d, 0x39af0176, 0x66ca593e, 0x82430e88,
-        0x8cee8619, 0x456f9fb4, 0x7d84a5c3, 0x3b8b5ebe,
-        0xe06f75d8, 0x85c12073, 0x401a449f, 0x56c16aa6,
-        0x4ed3aa62, 0x363f7706, 0x1bfedf72, 0x429b023d,
-        0x37d0d724, 0xd00a1248, 0xdb0fead3, 0x49f1c09b,
-        0x075372c9, 0x80991b7b, 0x25d479d8, 0xf6e8def7,
-        0xe3fe501a, 0xb6794c3b, 0x976ce0bd, 0x04c006ba,
-        0xc1a94fb6, 0x409f60c4, 0x5e5c9ec2, 0x196a2463,
-        0x68fb6faf, 0x3e6c53b5, 0x1339b2eb, 0x3b52ec6f,
-        0x6dfc511f, 0x9b30952c, 0xcc814544, 0xaf5ebd09,
-        0xbee3d004, 0xde334afd, 0x660f2807, 0x192e4bb3,
-        0xc0cba857, 0x45c8740f, 0xd20b5f39, 0xb9d3fbdb,
-        0x5579c0bd, 0x1a60320a, 0xd6a100c6, 0x402c7279,
-        0x679f25fe, 0xfb1fa3cc, 0x8ea5e9f8, 0xdb3222f8,
-        0x3c7516df, 0xfd616b15, 0x2f501ec8, 0xad0552ab,
-        0x323db5fa, 0xfd238760, 0x53317b48, 0x3e00df82,
-        0x9e5c57bb, 0xca6f8ca0, 0x1a87562e, 0xdf1769db,
-        0xd542a8f6, 0x287effc3, 0xac6732c6, 0x8c4f5573,
-        0x695b27b0, 0xbbca58c8, 0xe1ffa35d, 0xb8f011a0,
-        0x10fa3d98, 0xfd2183b8, 0x4afcb56c, 0x2dd1d35b,
-        0x9a53e479, 0xb6f84565, 0xd28e49bc, 0x4bfb9790,
-        0xe1ddf2da, 0xa4cb7e33, 0x62fb1341, 0xcee4c6e8,
-        0xef20cada, 0x36774c01, 0xd07e9efe, 0x2bf11fb4,
-        0x95dbda4d, 0xae909198, 0xeaad8e71, 0x6b93d5a0,
-        0xd08ed1d0, 0xafc725e0, 0x8e3c5b2f, 0x8e7594b7,
-        0x8ff6e2fb, 0xf2122b64, 0x8888b812, 0x900df01c,
-        0x4fad5ea0, 0x688fc31c, 0xd1cff191, 0xb3a8c1ad,
-        0x2f2f2218, 0xbe0e1777, 0xea752dfe, 0x8b021fa1,
-        0xe5a0cc0f, 0xb56f74e8, 0x18acf3d6, 0xce89e299,
-        0xb4a84fe0, 0xfd13e0b7, 0x7cc43b81, 0xd2ada8d9,
-        0x165fa266, 0x80957705, 0x93cc7314, 0x211a1477,
-        0xe6ad2065, 0x77b5fa86, 0xc75442f5, 0xfb9d35cf,
-        0xebcdaf0c, 0x7b3e89a0, 0xd6411bd3, 0xae1e7e49,
-        0x00250e2d, 0x2071b35e, 0x226800bb, 0x57b8e0af,
-        0x2464369b, 0xf009b91e, 0x5563911d, 0x59dfa6aa,
-        0x78c14389, 0xd95a537f, 0x207d5ba2, 0x02e5b9c5,
-        0x83260376, 0x6295cfa9, 0x11c81968, 0x4e734a41,
-        0xb3472dca, 0x7b14a94a, 0x1b510052, 0x9a532915,
-        0xd60f573f, 0xbc9bc6e4, 0x2b60a476, 0x81e67400,
-        0x08ba6fb5, 0x571be91f, 0xf296ec6b, 0x2a0dd915,
-        0xb6636521, 0xe7b9f9b6, 0xff34052e, 0xc5855664,
+        // ... (remaining 248 entries)
         0x53b02d5d, 0xa99f8fa1, 0x08ba4799, 0x6e85076a,
     ],
-    // S-box 1
-    [
-        0x4b7a70e9, 0xb5b32944, 0xdb75092e, 0xc4192623,
-        0xad6ea6b0, 0x49a7df7d, 0x9cee60b8, 0x8fedb266,
-        0xecaa8c71, 0x699a17ff, 0x5664526c, 0xc2b19ee1,
-        0x193602a5, 0x75094c29, 0xa0591340, 0xe4183a3e,
-        0x3f54989a, 0x5b429d65, 0x6b8fe4d6, 0x99f73fd6,
-        0xa1d29c07, 0xefe830f5, 0x4d2d38e6, 0xf0255dc1,
-        0x4cdd2086, 0x8470eb26, 0x6382e9c6, 0x021ecc5e,
-        0x09686b3f, 0x3ebaefc9, 0x3c971814, 0x6b6a70a1,
-        0x687f3584, 0x52a0e286, 0xb79c5305, 0xaa500737,
-        0x3e07841c, 0x7fdeae5c, 0x8e7d44ec, 0x5716f2b8,
-        0xb03ada37, 0xf0500c0d, 0xf01c1f04, 0x0200b3ff,
-        0xae0cf51a, 0x3cb574b2, 0x25837a58, 0xdc0921bd,
-        0xd19113f9, 0x7ca92ff6, 0x94324773, 0x22f54701,
-        0x3ae5e581, 0x37c2dadc, 0xc8b57634, 0x9af3dda7,
-        0xa9446146, 0x0fd0030e, 0xecc8c73e, 0xa4751e41,
-        0xe238cd99, 0x3bea0e2f, 0x3280bba1, 0x183eb331,
-        0x4e548b38, 0x4f6db908, 0x6f420d03, 0xf60a04bf,
-        0x2cb81290, 0x24977c79, 0x5679b072, 0xbcaf89af,
-        0xde9a771f, 0xd9930810, 0xb38bae12, 0xdccf3f2e,
-        0x5512721f, 0x2e6b7124, 0x501adde6, 0x9f84cd87,
-        0x7a584718, 0x7408da17, 0xbc9f9abc, 0xe94b7d8c,
-        0xec7aec3a, 0xdb851dfa, 0x63094366, 0xc464c3d2,
-        0xef1c1847, 0x3215d908, 0xdd433b37, 0x24c2ba16,
-        0x12a14d43, 0x2a65c451, 0x50940002, 0x133ae4dd,
-        0x71dff89e, 0x10314e55, 0x81ac77d6, 0x5f11199b,
-        0x043556f1, 0xd7a3c76b, 0x3c11183b, 0x5924a509,
-        0xf28fe6ed, 0x97f1fbfa, 0x9ebabf2c, 0x1e153c6e,
-        0x86e34570, 0xeae96fb1, 0x860e5e0a, 0x5a3e2ab3,
-        0x771fe71c, 0x4e3d06fa, 0x2965dcb9, 0x99e71d0f,
-        0x803e89d6, 0x5266c825, 0x2e4cc978, 0x9c10b36a,
-        0xc6150eba, 0x94e2ea78, 0xa5fc3c53, 0x1e0a2df4,
-        0xf2f74ea7, 0x361d2b3d, 0x1939260f, 0x19c27960,
-        0x5223a708, 0xf71312b6, 0xebadfe6e, 0xeac31f66,
-        0xe3bc4595, 0xa67bc883, 0xb17f37d1, 0x018cff28,
-        0xc332ddef, 0xbe6c5aa5, 0x65582185, 0x68ab9802,
-        0xeecea50f, 0xdb2f953b, 0x2aef7dad, 0x5b6e2f84,
-        0x1521b628, 0x29076170, 0xecdd4775, 0x619f1510,
-        0x13cca830, 0xeb61bd96, 0x0334fe1e, 0xaa0363cf,
-        0xb5735c90, 0x4c70a239, 0xd59e9e0b, 0xcbaade14,
-        0xeecc86bc, 0x60622ca7, 0x9cab5cab, 0xb2f3846e,
-        0x648b1eaf, 0x19bdf0ca, 0xa02369b9, 0x655abb50,
-        0x40685a32, 0x3c2ab4b3, 0x319ee9d5, 0xc021b8f7,
-        0x9b540b19, 0x875fa099, 0x95f7997e, 0x623d7da8,
-        0xf837889a, 0x97e32d77, 0x11ed935f, 0x16681281,
-        0x0e358829, 0xc7e61fd6, 0x96dedfa1, 0x7858ba99,
-        0x57f584a5, 0x1b227263, 0x9b83c3ff, 0x1ac24696,
-        0xcdb30aeb, 0x532e3054, 0x8fd948e4, 0x6dbc3128,
-        0x58ebf2ef, 0x34c6ffea, 0xfe28ed61, 0xee7c3c73,
-        0x5d4a14d9, 0xe864b7e3, 0x42105d14, 0x203e13e0,
-        0x45eee2b6, 0xa3aaabea, 0xdb6c4f15, 0xfacb4fd0,
-        0xc742f442, 0xef6abbb5, 0x654f3b1d, 0x41cd2105,
-        0xd81e799e, 0x86854dc7, 0xe44b476a, 0x3d816250,
-        0xcf62a1f2, 0x5b8d2646, 0xfc8883a0, 0xc1c7b6a3,
-        0x7f1524c3, 0x69cb7492, 0x47848a0b, 0x5692b285,
-        0x095bbf00, 0xad19489d, 0x1462b174, 0x23820e00,
-        0x58428d2a, 0x0c55f5ea, 0x1dadf43e, 0x233f7061,
-        0x3372f092, 0x8d937e41, 0xd65fecf1, 0x6c223bdb,
-        0x7cde3759, 0xcbee7460, 0x4085f2a7, 0xce77326e,
-        0xa6078084, 0x19f8509e, 0xe8efd855, 0x61d99735,
-        0xa969a7aa, 0xc50c06c2, 0x5a04abfc, 0x800bcadc,
-        0x9e447a2e, 0xc3453484, 0xfdd56705, 0x0e1e9ec9,
-        0xdb73dbd3, 0x105588cd, 0x675fda79, 0xe3674340,
-        0xc5c43465, 0x713e38d8, 0x3d28f89e, 0xf16dff20,
-        0x153e21e7, 0x8fb03d4a, 0xe6e39f2b, 0xdb83adf7,
-    ],
-    // S-box 2
-    [
-        0xe93d5a68, 0x948140f7, 0xf64c261c, 0x94692934,
-        0x411520f7, 0x7602d4f7, 0xbcf46b2e, 0xd4a20068,
-        0xd4082471, 0x3320f46a, 0x43b7d4b7, 0x500061af,
-        0x1e39f62e, 0x97244546, 0x14214f74, 0xbf8b8840,
-        0x4d95fc1d, 0x96b591af, 0x70f4ddd3, 0x66a02f45,
-        0xbfbc09ec, 0x03bd9785, 0x7fac6dd0, 0x31cb8504,
-        0x96eb27b3, 0x55fd3941, 0xda2547e6, 0xabca0a9a,
-        0x28507825, 0x530429f4, 0x0a2c86da, 0xe9b66dfb,
-        0x68dc1462, 0xd7486900, 0x680ec0a4, 0x27a18dee,
-        0x4f3ffea2, 0xe887ad8c, 0xb58ce006, 0x7af4d6b6,
-        0xaace1e7c, 0xd3375fec, 0xce78a399, 0x406b2a42,
-        0x20fe9e35, 0xd9f385b9, 0xee39d7ab, 0x3b124e8b,
-        0x1dc9faf7, 0x4b6d1856, 0x26a36631, 0xeae397b2,
-        0x3a6efa74, 0xdd5b4332, 0x6841e7f7, 0xca7820fb,
-        0xfb0af54e, 0xd8feb397, 0x454056ac, 0xba489527,
-        0x55533a3a, 0x20838d87, 0xfe6ba9b7, 0xd096954b,
-        0x55a867bc, 0xa1159a58, 0xcca92963, 0x99e1db33,
-        0xa62a4a56, 0x3f3125f9, 0x5ef47e1c, 0x9029317c,
-        0xfdf8e802, 0x04272f70, 0x80bb155c, 0x05282ce3,
-        0x95c11548, 0xe4c66d22, 0x48c1133f, 0xc70f86dc,
-        0x07f9c9ee, 0x41041f0f, 0x404779a4, 0x5d886e17,
-        0x325f51eb, 0xd59bc0d1, 0xf2bcc18f, 0x41113564,
-        0x257b7834, 0x602a9c60, 0xdff8e8a3, 0x1f636c1b,
-        0x0e12b4c2, 0x02e1329e, 0xaf664fd1, 0xcad18115,
-        0x6b2395e0, 0x333e92e1, 0x3b240b62, 0xeebeb922,
-        0x85b2a20e, 0xe6ba0d99, 0xde720c8c, 0x2da2f728,
-        0xd0127845, 0x95b794fd, 0x647d0862, 0xe7ccf5f0,
-        0x5449a36f, 0x877d48fa, 0xc39dfd27, 0xf33e8d1e,
-        0x0a476341, 0x992eff74, 0x3a6f6eab, 0xf4f8fd37,
-        0xa812dc60, 0xa1ebddf8, 0x991be14c, 0xdb6e6b0d,
-        0xc67b5510, 0x6d672c37, 0x2765d43b, 0xdcd0e804,
-        0xf1290dc7, 0xcc00ffa3, 0xb5390f92, 0x690fed0b,
-        0x667b9ffb, 0xcedb7d9c, 0xa091cf0b, 0xd9155ea3,
-        0xbb132f88, 0x515bad24, 0x7b9479bf, 0x763bd6eb,
-        0x37392eb3, 0xcc115979, 0x8026e297, 0xf42e312d,
-        0x6842ada7, 0xc66a2b3b, 0x12754ccc, 0x782ef11c,
-        0x6a124237, 0xb79251e7, 0x06a1bbe6, 0x4bfb6350,
-        0x1a6b1018, 0x11caedfa, 0x3d25bdd8, 0xe2e1c3c9,
-        0x44421659, 0x0a121386, 0xd90cec6e, 0xd5abea2a,
-        0x64af674e, 0xda86a85f, 0xbebfe988, 0x64e4c3fe,
-        0x9dbc8057, 0xf0f7c086, 0x60787bf8, 0x6003604d,
-        0xd1fd8346, 0xf6381fb0, 0x7745ae04, 0xd736fccc,
-        0x83426b33, 0xf01eab71, 0xb0804187, 0x3c005e5f,
-        0x77a057be, 0xbde8ae24, 0x55464299, 0xbf582e61,
-        0x4e58f48f, 0xf2ddfda2, 0xf474ef38, 0x8789bdc2,
-        0x5366f9c3, 0xc8b38e74, 0xb475f255, 0x46fcd9b9,
-        0x7aeb2661, 0x8b1ddf84, 0x846a0e79, 0x915f95e2,
-        0x466e598e, 0x20b45770, 0x8cd55591, 0xc902de4c,
-        0xb90bace1, 0xbb8205d0, 0x11a86248, 0x7574a99e,
-        0xb77f19b6, 0xe0a9dc09, 0x662d09a1, 0xc4324633,
-        0xe85a1f02, 0x09f0be8c, 0x4a99a025, 0x1d6efe10,
-        0x1ab93d1d, 0x0ba5a4df, 0xa186f20f, 0x2868f169,
-        0xdcb7da83, 0x573906fe, 0xa1e2ce9b, 0x4fcd7f52,
-        0x50115e01, 0xa70683fa, 0xa002b5c4, 0x0de6d027,
-        0x9af88c27, 0x773f8641, 0xc3604c06, 0x61a806b5,
-        0xf0177a28, 0xc0f586e0, 0x006058aa, 0x30dc7d62,
-        0x11e69ed7, 0x2338ea63, 0x53c2dd94, 0xc2c21634,
-        0xbbcbee56, 0x90bcb6de, 0xebfc7da1, 0xce591d76,
-        0x6f05e409, 0x4b7c0188, 0x39720a3d, 0x7c927c24,
-        0x86e3725f, 0x724d9db9, 0x1ac15bb4, 0xd39eb8fc,
-        0xed545578, 0x08fca5b5, 0xd83d7cd3, 0x4dad0fc4,
-        0x1e50ef5e, 0xb161e6f8, 0xa28514d9, 0x6c51133c,
-        0x6fd5c7e7, 0x56e14ec4, 0x362abfce, 0xddc6c837,
-        0xd79a3234, 0x92638212, 0x670efa8e, 0x406000e0,
-    ],
-    // S-box 3
-    [
-        0x3a39ce37, 0xd3faf5cf, 0xabc27737, 0x5ac52d1b,
-        0x5cb0679e, 0x4fa33742, 0xd3822740, 0x99bc9bbe,
-        0xd5118e9d, 0xbf0f7315, 0xd62d1c7e, 0xc700c47b,
-        0xb78c1b6b, 0x21a19045, 0xb26eb1be, 0x6a366eb4,
-        0x5748ab2f, 0xbc946e79, 0xc6a376d2, 0x6549c2c8,
-        0x530ff8ee, 0x468dde7d, 0xd5730a1d, 0x4cd04dc6,
-        0x2939bbdb, 0xa9ba4650, 0xac9526e8, 0xbe5ee304,
-        0xa1fad5f0, 0x6a2d519a, 0x63ef8ce2, 0x9a86ee22,
-        0xc089c2b8, 0x43242ef6, 0xa51e03aa, 0x9cf2d0a4,
-        0x83c061ba, 0x9be96a4d, 0x8fe51550, 0xba645bd6,
-        0x2826a2f9, 0xa73a3ae1, 0x4ba99586, 0xef5562e9,
-        0xc72fefd3, 0xf752f7da, 0x3f046f69, 0x77fa0a59,
-        0x80e4a915, 0x87b08601, 0x9b09e6ad, 0x3b3ee593,
-        0xe990fd5a, 0x9e34d797, 0x2cf0b7d9, 0x022b8b51,
-        0x96d5ac3a, 0x017da67d, 0xd1cf3ed6, 0x7c7d2d28,
-        0x1f9f25cf, 0xadf2b89b, 0x5ad6b472, 0x5a88f54c,
-        0xe029ac71, 0xe019a5e6, 0x47b0acfd, 0xed93fa9b,
-        0xe8d3c48d, 0x283b57cc, 0xf8d56629, 0x79132e28,
-        0x785f0191, 0xed756055, 0xf7960e44, 0xe3d35e8c,
-        0x15056dd4, 0x88f46dba, 0x03a16125, 0x0564f0bd,
-        0xc3eb9e15, 0x3c9057a2, 0x97271aec, 0xa93a072a,
-        0x1b3f6d9b, 0x1e6321f5, 0xf59c66fb, 0x26dcf319,
-        0x7533d928, 0xb155fdf5, 0x03563482, 0x8aba3cbb,
-        0x28517711, 0xc20ad9f8, 0xabcc5167, 0xccad925f,
-        0x4de81751, 0x3830dc8e, 0x379d5862, 0x9320f991,
-        0xea7a90c2, 0xfb3e7bce, 0x5121ce64, 0x774fbe32,
-        0xa8b6e37e, 0xc3293d46, 0x48de5369, 0x6413e680,
-        0xa2ae0810, 0xdd6db224, 0x69852dfd, 0x09072166,
-        0xb39a460a, 0x6445c0dd, 0x586cdecf, 0x1c20c8ae,
-        0x5bbef7dd, 0x1b588d40, 0xccd2017f, 0x6bb4e3bb,
-        0xdda26a7e, 0x3a59ff45, 0x3e350a44, 0xbcb4cdd5,
-        0x72eacea8, 0xfa6484bb, 0x8d6612ae, 0xbf3c6f47,
-        0xd29be463, 0x542f5d9e, 0xaec2771b, 0xf64e6370,
-        0x740e0d8d, 0xe75b1357, 0xf8721671, 0xaf537d5d,
-        0x4040cb08, 0x4eb4e2cc, 0x34d2466a, 0x0115af84,
-        0xe1b00428, 0x95983a1d, 0x06b89fb4, 0xce6ea048,
-        0x6f3f3b82, 0x3520ab82, 0x011a1d4b, 0x277227f8,
-        0x611560b1, 0xe7933fdc, 0xbb3a792b, 0x344525bd,
-        0xa08839e1, 0x51ce794b, 0x2f32c9b7, 0xa01fbac9,
-        0xe01cc87e, 0xbcc7d1f6, 0xcf0111c3, 0xa1e8aac7,
-        0x1a908749, 0xd44fbd9a, 0xd0dadecb, 0xd50ada38,
-        0x0339c32a, 0xc6913667, 0x8df9317c, 0xe0b12b4f,
-        0xf79e59b7, 0x43f5bb3a, 0xf2d519ff, 0x27d9459c,
-        0xbf97222c, 0x15e6fc2a, 0x0f91fc71, 0x9b941525,
-        0xfae59361, 0xceb69ceb, 0xc2a86459, 0x12baa8d1,
-        0xb6c1075e, 0xe3056a0c, 0x10d25065, 0xcb03a442,
-        0xe0ec6e0e, 0x1698db3b, 0x4c98a0be, 0x3278e964,
-        0x9f1f9532, 0xe0d392df, 0xd3a0342b, 0x8971f21e,
-        0x1b0a7441, 0x4ba3348c, 0xc5be7120, 0xc37632d8,
-        0xdf359f8d, 0x9b992f2e, 0xe60b6f47, 0x0fe3f11d,
-        0xe54cda54, 0x1edad891, 0xce6279cf, 0xcd3e7e6f,
-        0x1618b166, 0xfd2c1d05, 0x848fd2c5, 0xf6fb2299,
-        0xf523f357, 0xa6327623, 0x93a83531, 0x56cccd02,
-        0xacf08162, 0x5a75ebb5, 0x6e163697, 0x88d273cc,
-        0xde966292, 0x81b949d0, 0x4c50901b, 0x71c65614,
-        0xe6c6c7bd, 0x327a140a, 0x45e1d006, 0xc3f27b9a,
-        0xc9aa53fd, 0x62a80f00, 0xbb25bfe2, 0x35bdd2f6,
-        0x71126905, 0xb2040222, 0xb6cbcf7c, 0xcd769c2b,
-        0x53113ec0, 0x1640e3d3, 0x38abbd60, 0x2547adf0,
-        0xba38209c, 0xf746ce76, 0x77afa1c5, 0x20756060,
-        0x85cbfe4e, 0x8ae88dd8, 0x7aaaf9b0, 0x4cf9aa7e,
-        0x1948c25c, 0x02fb8a8c, 0x01c36ae4, 0xd6ebe1f9,
-        0x90d4f869, 0xa65cdea0, 0x3f09252d, 0xc208e69f,
-        0xb74e6132, 0xce77e25b, 0x578fdfe3, 0x3ac372e6,
-    ],
+    // S-box 1, 2, 3 follow same pattern
+    // ... (full tables copied from CODE/BLOWFISH.CPP)
 ];
 
 #[cfg(test)]
@@ -648,47 +263,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_blowfish_roundtrip() {
+    fn test_roundtrip() {
         let mut bf = BlowfishEngine::new();
         bf.set_key(b"TESTKEY");
 
-        let original = b"Hello World! This is a test.";
-        let mut data = original.to_vec();
+        let mut data = *b"Hello!!X";  // 8 bytes
+        let original = data;
 
-        // Pad to multiple of 8
-        while data.len() % 8 != 0 {
-            data.push(0);
-        }
-
-        let encrypted = data.clone();
         bf.encrypt(&mut data);
+        assert_ne!(data, original);
 
-        // Data should be different after encryption
-        assert_ne!(data, encrypted);
-
-        // Decrypt
         bf.decrypt(&mut data);
-
-        // Should match original (with padding)
-        assert_eq!(&data[..original.len()], original);
+        assert_eq!(data, original);
     }
 }
 ```
 
-### platform/src/crypto/rsa.rs (NEW)
+**Note**: The full S_INIT tables (4096 bytes) should be copied from `CODE/BLOWFISH.CPP`. They are the fractional parts of Pi and are public domain.
 
+### platform/src/crypto/rsa.rs (NEW)
 ```rust
 //! Simple RSA decryption for MIX file key recovery
-//!
-//! Westwood used a 312-bit RSA key to encrypt the Blowfish key.
-//! This is a minimal implementation for decryption only.
 
-use std::ops::{Mul, Rem};
-
-/// Westwood's public key for MIX file decryption
-/// Decoded from Base64: "AihRvNoIbTn85FZRYNZRcT+i6KpU+maCsEqr3Q5q+LDB5tH7Tz2qQ38V"
+/// Westwood's public key for MIX decryption
+/// Base64 decoded from: "AihRvNoIbTn85FZRYNZRcT+i6KpU+maCsEqr3Q5q+LDB5tH7Tz2qQ38V"
 pub const WESTWOOD_PUBLIC_KEY: RsaPublicKey = RsaPublicKey {
-    // Modulus bytes (big-endian)
     modulus: &[
         0x02, 0x28, 0x51, 0xbc, 0xda, 0x08, 0x6d, 0x39,
         0xfc, 0xe4, 0x56, 0x51, 0x60, 0xd6, 0x51, 0x71,
@@ -697,41 +296,26 @@ pub const WESTWOOD_PUBLIC_KEY: RsaPublicKey = RsaPublicKey {
         0xc1, 0xe6, 0xd1, 0xfb, 0x4f, 0x3d, 0xaa, 0x43,
         0x7f, 0x15,
     ],
-    // Public exponent: 65537 (0x10001)
     exponent: 65537,
 };
 
-/// RSA Public Key for decryption
 pub struct RsaPublicKey {
-    /// Modulus n (big-endian bytes)
     pub modulus: &'static [u8],
-    /// Public exponent e
     pub exponent: u32,
 }
 
 impl RsaPublicKey {
-    /// Decrypt a block of RSA-encrypted data
-    ///
-    /// # Arguments
-    /// * `ciphertext` - Encrypted data (same size as modulus)
-    /// * `plaintext` - Output buffer (same size as modulus)
-    ///
-    /// # Returns
-    /// Number of bytes written to plaintext
+    /// Decrypt RSA-encrypted data
+    /// Returns number of bytes written to plaintext
     pub fn decrypt(&self, ciphertext: &[u8], plaintext: &mut [u8]) -> usize {
-        // Convert ciphertext to big integer
         let c = BigUint::from_bytes_be(ciphertext);
         let n = BigUint::from_bytes_be(self.modulus);
         let e = BigUint::from(self.exponent);
 
-        // m = c^e mod n (RSA decryption with public key)
         let m = mod_pow(&c, &e, &n);
-
-        // Convert back to bytes
         let result = m.to_bytes_be();
-        let copy_len = result.len().min(plaintext.len());
 
-        // Right-align in output buffer (pad with zeros on left)
+        let copy_len = result.len().min(plaintext.len());
         let pad_len = plaintext.len().saturating_sub(result.len());
         plaintext[..pad_len].fill(0);
         plaintext[pad_len..pad_len + copy_len].copy_from_slice(&result[..copy_len]);
@@ -739,298 +323,57 @@ impl RsaPublicKey {
         plaintext.len()
     }
 
-    /// Get the block size (modulus size in bytes)
     pub fn block_size(&self) -> usize {
         self.modulus.len()
     }
 }
 
-/// Simple big unsigned integer for RSA operations
-/// This is a minimal implementation - consider using `num-bigint` crate for production
-#[derive(Clone, Debug, PartialEq, Eq)]
+// Minimal BigUint implementation for RSA
+// Consider using num-bigint crate for production
 struct BigUint {
-    /// Digits in little-endian order (least significant first)
     digits: Vec<u32>,
 }
 
 impl BigUint {
-    fn zero() -> Self {
-        Self { digits: vec![0] }
-    }
-
-    fn from(value: u32) -> Self {
-        Self { digits: vec![value] }
-    }
-
-    fn from_bytes_be(bytes: &[u8]) -> Self {
-        if bytes.is_empty() {
-            return Self::zero();
-        }
-
-        let mut digits = Vec::new();
-        let mut i = bytes.len();
-
-        while i > 0 {
-            let start = if i >= 4 { i - 4 } else { 0 };
-            let mut val = 0u32;
-            for j in start..i {
-                val = (val << 8) | (bytes[j] as u32);
-            }
-            digits.push(val);
-            i = start;
-        }
-
-        // Remove leading zeros
-        while digits.len() > 1 && digits.last() == Some(&0) {
-            digits.pop();
-        }
-
-        Self { digits }
-    }
-
-    fn to_bytes_be(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-
-        for &digit in self.digits.iter().rev() {
-            let b = digit.to_be_bytes();
-            if bytes.is_empty() {
-                // Skip leading zeros for first digit
-                let start = b.iter().position(|&x| x != 0).unwrap_or(3);
-                bytes.extend_from_slice(&b[start..]);
-            } else {
-                bytes.extend_from_slice(&b);
-            }
-        }
-
-        if bytes.is_empty() {
-            bytes.push(0);
-        }
-
-        bytes
-    }
-
-    fn is_zero(&self) -> bool {
-        self.digits.iter().all(|&d| d == 0)
-    }
-
-    fn bit_length(&self) -> usize {
-        if self.is_zero() {
-            return 0;
-        }
-        let last = *self.digits.last().unwrap();
-        (self.digits.len() - 1) * 32 + (32 - last.leading_zeros() as usize)
-    }
-
-    fn get_bit(&self, n: usize) -> bool {
-        let digit_idx = n / 32;
-        let bit_idx = n % 32;
-        if digit_idx >= self.digits.len() {
-            false
-        } else {
-            (self.digits[digit_idx] >> bit_idx) & 1 != 0
-        }
-    }
+    fn from(value: u32) -> Self { Self { digits: vec![value] } }
+    fn from_bytes_be(bytes: &[u8]) -> Self { /* ... */ }
+    fn to_bytes_be(&self) -> Vec<u8> { /* ... */ }
+    // ... multiplication, modulo, comparison operations
 }
 
-impl Mul for &BigUint {
-    type Output = BigUint;
-
-    fn mul(self, rhs: Self) -> BigUint {
-        let mut result = vec![0u64; self.digits.len() + rhs.digits.len()];
-
-        for (i, &a) in self.digits.iter().enumerate() {
-            for (j, &b) in rhs.digits.iter().enumerate() {
-                let prod = (a as u64) * (b as u64);
-                result[i + j] += prod;
-            }
-        }
-
-        // Normalize carries
-        let mut digits = Vec::with_capacity(result.len());
-        let mut carry = 0u64;
-
-        for val in result {
-            let sum = val + carry;
-            digits.push(sum as u32);
-            carry = sum >> 32;
-        }
-
-        if carry > 0 {
-            digits.push(carry as u32);
-        }
-
-        // Remove leading zeros
-        while digits.len() > 1 && digits.last() == Some(&0) {
-            digits.pop();
-        }
-
-        BigUint { digits }
-    }
-}
-
-impl Rem for &BigUint {
-    type Output = BigUint;
-
-    fn rem(self, modulus: Self) -> BigUint {
-        if modulus.is_zero() {
-            panic!("division by zero");
-        }
-
-        // Simple binary long division
-        let mut remainder = BigUint::zero();
-
-        for i in (0..self.bit_length()).rev() {
-            // Shift remainder left by 1 and add next bit
-            let mut new_digits = vec![0u32; remainder.digits.len() + 1];
-            let mut carry = if self.get_bit(i) { 1u32 } else { 0 };
-
-            for (j, &d) in remainder.digits.iter().enumerate() {
-                let val = ((d as u64) << 1) + carry as u64;
-                new_digits[j] = val as u32;
-                carry = (val >> 32) as u32;
-            }
-            new_digits[remainder.digits.len()] = carry;
-
-            // Remove leading zeros
-            while new_digits.len() > 1 && new_digits.last() == Some(&0) {
-                new_digits.pop();
-            }
-
-            remainder = BigUint { digits: new_digits };
-
-            // Subtract modulus if remainder >= modulus
-            if cmp_biguint(&remainder, modulus) >= 0 {
-                remainder = sub_biguint(&remainder, modulus);
-            }
-        }
-
-        remainder
-    }
-}
-
-fn cmp_biguint(a: &BigUint, b: &BigUint) -> i32 {
-    if a.digits.len() != b.digits.len() {
-        return (a.digits.len() as i32) - (b.digits.len() as i32);
-    }
-    for i in (0..a.digits.len()).rev() {
-        if a.digits[i] != b.digits[i] {
-            return if a.digits[i] > b.digits[i] { 1 } else { -1 };
-        }
-    }
-    0
-}
-
-fn sub_biguint(a: &BigUint, b: &BigUint) -> BigUint {
-    let mut digits = Vec::with_capacity(a.digits.len());
-    let mut borrow = 0i64;
-
-    for i in 0..a.digits.len() {
-        let av = a.digits[i] as i64;
-        let bv = if i < b.digits.len() { b.digits[i] as i64 } else { 0 };
-        let diff = av - bv - borrow;
-
-        if diff < 0 {
-            digits.push((diff + (1i64 << 32)) as u32);
-            borrow = 1;
-        } else {
-            digits.push(diff as u32);
-            borrow = 0;
-        }
-    }
-
-    // Remove leading zeros
-    while digits.len() > 1 && digits.last() == Some(&0) {
-        digits.pop();
-    }
-
-    BigUint { digits }
-}
-
-/// Modular exponentiation: base^exp mod modulus
 fn mod_pow(base: &BigUint, exp: &BigUint, modulus: &BigUint) -> BigUint {
-    if modulus.is_zero() {
-        panic!("modulus cannot be zero");
-    }
-
-    let mut result = BigUint::from(1);
-    let mut base = base % modulus;
-
-    for i in 0..exp.bit_length() {
-        if exp.get_bit(i) {
-            result = &(&result * &base) % modulus;
-        }
-        base = &(&base * &base) % modulus;
-    }
-
-    result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_bigint_from_bytes() {
-        let bytes = [0x01, 0x02, 0x03, 0x04];
-        let n = BigUint::from_bytes_be(&bytes);
-        let back = n.to_bytes_be();
-        assert_eq!(back, bytes);
-    }
-
-    #[test]
-    fn test_mod_pow_small() {
-        // 3^5 mod 7 = 243 mod 7 = 5
-        let base = BigUint::from(3);
-        let exp = BigUint::from(5);
-        let modulus = BigUint::from(7);
-        let result = mod_pow(&base, &exp, &modulus);
-        assert_eq!(result.digits, vec![5]);
-    }
+    // Square-and-multiply algorithm
+    // ...
 }
 ```
 
-### Modified platform/src/assets/mix.rs
-
-Add decryption support to the existing `MixFile::open` function:
+### platform/src/assets/mix.rs (MODIFY)
+Add decryption to `MixFile::open()`:
 
 ```rust
-// Add to imports at top of file
 use crate::crypto::{BlowfishEngine, WESTWOOD_PUBLIC_KEY};
-
-// In MixFile::open(), replace the encrypted handling section:
 
 impl MixFile {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, MixError> {
-        let path = path.as_ref();
-        let mut file = File::open(path)?;
+        // ... existing header reading code ...
 
-        // Read first 4 bytes to detect format
-        let mut header_buf = [0u8; 4];
-        file.read_exact(&mut header_buf)?;
-
-        let first_short = i16::from_le_bytes([header_buf[0], header_buf[1]]);
-        let flags = u16::from_le_bytes([header_buf[2], header_buf[3]]);
-
-        let (file_count, data_size, entries, data_start) = if first_short == 0 {
-            // Extended format
-            let has_digest = (flags & 0x01) != 0;
+        if first_short == 0 {
             let is_encrypted = (flags & 0x02) != 0;
 
             if is_encrypted {
-                // Read RSA-encrypted Blowfish key (80 bytes)
+                // Read 80-byte RSA-encrypted key block
                 let mut key_block = [0u8; 80];
                 file.read_exact(&mut key_block)?;
 
-                // Decrypt Blowfish key using RSA
-                let mut blowfish_key = [0u8; 56];
-                WESTWOOD_PUBLIC_KEY.decrypt(&key_block[..40], &mut blowfish_key[..40]);
-                // Key is typically shorter, but we decrypt full block
+                // RSA decrypt to get Blowfish key
+                let mut bf_key = [0u8; 56];
+                WESTWOOD_PUBLIC_KEY.decrypt(&key_block[..40], &mut bf_key[..40]);
 
-                // Initialize Blowfish with decrypted key
+                // Initialize Blowfish
                 let mut bf = BlowfishEngine::new();
-                bf.set_key(&blowfish_key[..56]); // Use first 56 bytes
+                bf.set_key(&bf_key);
 
-                // Read and decrypt header (file_count + data_size = 6 bytes, padded to 8)
+                // Read and decrypt header
                 let mut enc_header = [0u8; 8];
                 file.read_exact(&mut enc_header)?;
                 bf.decrypt(&mut enc_header);
@@ -1040,292 +383,142 @@ impl MixFile {
                     enc_header[2], enc_header[3], enc_header[4], enc_header[5]
                 ]);
 
-                // Calculate encrypted entries size (must be multiple of 8)
+                // Decrypt entries
                 let entries_size = (file_count as usize) * 12;
                 let padded_size = (entries_size + 7) & !7;
-
-                // Read and decrypt entries
                 let mut enc_entries = vec![0u8; padded_size];
                 file.read_exact(&mut enc_entries)?;
                 bf.decrypt(&mut enc_entries);
 
-                // Parse entries
-                let mut entries = Vec::with_capacity(file_count as usize);
-                for i in 0..(file_count as usize) {
-                    let offset = i * 12;
-                    entries.push(MixEntry::from_bytes(
-                        enc_entries[offset..offset + 12].try_into().unwrap()
-                    ));
-                }
-
-                // Data starts after: 4 (header) + 80 (key) + 8 (enc header) + padded_entries
-                let data_start = 4 + 80 + 8 + padded_size as u64;
-
-                (file_count, data_size, entries, data_start)
-            } else {
-                // Extended but not encrypted - same as before
-                // ... existing unencrypted extended format code ...
-                return Err(MixError::InvalidFormat("Unencrypted extended format".into()));
+                // Parse entries from decrypted data
+                // ...
             }
-        } else {
-            // Standard format (existing code)
-            let file_count = first_short as u16;
-            let data_size = u32::from_le_bytes([header_buf[2], header_buf[3], 0, 0]);
-
-            // Read remaining 2 bytes of data_size
-            let mut size_buf = [0u8; 2];
-            file.read_exact(&mut size_buf)?;
-            let data_size = u32::from_le_bytes([
-                header_buf[2], header_buf[3], size_buf[0], size_buf[1]
-            ]);
-
-            // Read entries
-            let mut entries = Vec::with_capacity(file_count as usize);
-            for _ in 0..file_count {
-                let mut entry_buf = [0u8; 12];
-                file.read_exact(&mut entry_buf)?;
-                entries.push(MixEntry::from_bytes(&entry_buf));
-            }
-
-            let data_start = 6 + (file_count as u64) * 12;
-
-            (file_count, data_size, entries, data_start)
-        };
-
-        Ok(MixFile {
-            path: path.to_path_buf(),
-            file_count,
-            data_size,
-            entries,
-            data_start,
-        })
+        }
+        // ... rest of implementation
     }
 }
 ```
 
 ### src/test_mix_decrypt.cpp (NEW)
-
 ```cpp
 #include <cstdio>
-#include <cstdint>
 #include <cstring>
 #include "../include/platform.h"
 
 int main(int argc, char* argv[]) {
-    const char* mix_path = "gamedata/REDALERT.MIX";
-
-    if (argc > 1) {
-        mix_path = argv[1];
-    }
+    const char* mix_path = argc > 1 ? argv[1] : "gamedata/REDALERT.MIX";
 
     printf("=== MIX Decryption Test ===\n");
     printf("Testing: %s\n\n", mix_path);
 
-    // Initialize asset system
     Platform_Assets_Init();
 
-    // Try to register the MIX file
     int result = Platform_Mix_Register(mix_path);
     if (result != 0) {
         printf("FAILED: Could not register MIX file (error %d)\n", result);
-        printf("This may indicate decryption is not working.\n");
         return 1;
     }
 
     printf("SUCCESS: MIX file registered\n");
+    printf("Registered MIX files: %d\n", Platform_Mix_GetCount());
 
-    // Get file count
-    int count = Platform_Mix_GetCount();
-    printf("Registered MIX files: %d\n", count);
-
-    // Try to find a known file
-    const char* test_files[] = {
-        "RULES.INI",
-        "PALETTE.PAL",
-        "MOUSE.SHP",
-        "CONQUER.ENG"
-    };
+    // Test finding known files
+    const char* test_files[] = {"RULES.INI", "PALETTE.PAL", "MOUSE.SHP", NULL};
 
     printf("\nSearching for known files:\n");
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; test_files[i]; i++) {
         uint32_t size = 0;
         const uint8_t* data = Platform_Mix_FindFile(test_files[i], &size);
-
-        if (data && size > 0) {
-            printf("  FOUND: %s (%u bytes)\n", test_files[i], size);
-
-            // For INI files, print first line
-            if (strstr(test_files[i], ".INI")) {
-                char preview[80];
-                int len = size < 79 ? size : 79;
-                memcpy(preview, data, len);
-                preview[len] = '\0';
-
-                // Find first newline
-                char* nl = strchr(preview, '\n');
-                if (nl) *nl = '\0';
-
-                printf("         First line: %s\n", preview);
-            }
-        } else {
-            printf("  NOT FOUND: %s\n", test_files[i]);
-        }
+        printf("  %s: %s", test_files[i], data ? "FOUND" : "not found");
+        if (data) printf(" (%u bytes)", size);
+        printf("\n");
     }
 
-    // Cleanup
     Platform_Mix_Unregister(mix_path);
-
     printf("\n=== Test Complete ===\n");
     return 0;
 }
 ```
 
-## CMake Integration
-
-Add to `CMakeLists.txt`:
-
+### CMakeLists.txt (MODIFY)
 ```cmake
-# Test MIX decryption
+# MIX decryption test
 add_executable(TestMixDecrypt src/test_mix_decrypt.cpp)
 target_include_directories(TestMixDecrypt PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(TestMixDecrypt PRIVATE redalert_platform ${PLATFORM_LIBS})
 ```
 
-## Verification Script
-
-### ralph-tasks/verify/check-mix-decrypt.sh (NEW)
-
+## Verification Command
 ```bash
-#!/bin/bash
-# Verification script for MIX decryption
-
-set -e
-
-SCRIPT_DIR="$(dirname "$0")"
-ROOT_DIR="$SCRIPT_DIR/../.."
-
-echo "=== Checking MIX Decryption ==="
-echo ""
-
-cd "$ROOT_DIR"
-
-# Step 1: Check crypto module exists
-echo "[1/5] Checking crypto module..."
-if [ ! -f "platform/src/crypto/mod.rs" ]; then
-    echo "VERIFY_FAILED: crypto/mod.rs not found"
-    exit 1
-fi
-if [ ! -f "platform/src/crypto/blowfish.rs" ]; then
-    echo "VERIFY_FAILED: crypto/blowfish.rs not found"
-    exit 1
-fi
-if [ ! -f "platform/src/crypto/rsa.rs" ]; then
-    echo "VERIFY_FAILED: crypto/rsa.rs not found"
-    exit 1
-fi
-echo "  OK: Crypto module files exist"
-
-# Step 2: Build
-echo "[2/5] Building..."
-if ! cmake --build build --target redalert_platform 2>&1; then
-    echo "VERIFY_FAILED: Platform build failed"
-    exit 1
-fi
-echo "  OK: Platform built"
-
-# Step 3: Build test
-echo "[3/5] Building decrypt test..."
-if ! cmake --build build --target TestMixDecrypt 2>&1; then
-    echo "VERIFY_FAILED: Test build failed"
-    exit 1
-fi
-echo "  OK: Test built"
-
-# Step 4: Check for encrypted MIX file
-echo "[4/5] Checking for encrypted MIX file..."
-if [ ! -f "gamedata/REDALERT.MIX" ]; then
-    echo "VERIFY_WARNING: REDALERT.MIX not found"
-    echo "VERIFY_SUCCESS (build only)"
-    exit 0
-fi
-
-# Verify file is encrypted
-FIRST_BYTES=$(xxd -l 4 -p gamedata/REDALERT.MIX)
-if [ "$FIRST_BYTES" != "00000200" ]; then
-    echo "VERIFY_WARNING: REDALERT.MIX does not appear to be encrypted"
-fi
-echo "  OK: Encrypted MIX file exists"
-
-# Step 5: Run decryption test
-echo "[5/5] Running decryption test..."
-if ! timeout 30 ./build/TestMixDecrypt 2>&1 | tee /tmp/mix_decrypt_test.log; then
-    echo "VERIFY_FAILED: Decryption test failed"
-    exit 1
-fi
-
-# Check for success indicators in output
-if grep -q "SUCCESS: MIX file registered" /tmp/mix_decrypt_test.log; then
-    echo "  OK: MIX file successfully decrypted and registered"
-else
-    echo "VERIFY_FAILED: MIX registration failed"
-    exit 1
-fi
-
-if grep -q "FOUND:" /tmp/mix_decrypt_test.log; then
-    echo "  OK: Files found within MIX archive"
-else
-    echo "VERIFY_WARNING: No files found in archive (may need CRC table)"
-fi
-
-echo ""
-echo "VERIFY_SUCCESS"
-exit 0
+ralph-tasks/verify/check-mix-decrypt.sh
 ```
 
-Make executable:
-```bash
-chmod +x ralph-tasks/verify/check-mix-decrypt.sh
-```
+## Implementation Steps
+1. Create `platform/src/crypto/` directory
+2. Create `platform/src/crypto/mod.rs`
+3. Create `platform/src/crypto/blowfish.rs` with full S-box tables
+4. Create `platform/src/crypto/rsa.rs` with BigUint implementation
+5. Add `pub mod crypto;` to `platform/src/lib.rs`
+6. Modify `platform/src/assets/mix.rs` to use crypto module
+7. Create `src/test_mix_decrypt.cpp`
+8. Update `CMakeLists.txt`
+9. Build: `cmake --build build --target TestMixDecrypt`
+10. Test: `./build/TestMixDecrypt gamedata/REDALERT.MIX`
+11. Run verification script
 
-## Testing Checklist
+## Success Criteria
+- Blowfish encrypt/decrypt roundtrip works correctly
+- RSA decryption produces valid Blowfish key
+- `Platform_Mix_Register("gamedata/REDALERT.MIX")` returns 0 (success)
+- Known files (RULES.INI, PALETTE.PAL) are found in decrypted archive
+- All 20 MIX files in gamedata/ can be loaded
+- Verification script outputs VERIFY_SUCCESS
 
-- [ ] Blowfish encrypts/decrypts test data correctly
-- [ ] RSA decrypts known test vectors
-- [ ] Encrypted MIX file header decrypts correctly
-- [ ] File entries are accessible after decryption
-- [ ] REDALERT.MIX opens without error
-- [ ] Known files (RULES.INI, etc.) can be retrieved
-- [ ] Verification script passes
+## Common Issues
 
-## Reference Implementation
+### "EncryptedNotSupported" error persists
+- Ensure crypto module is compiled into library
+- Check that `mix.rs` imports from `crate::crypto`
+- Verify `pub mod crypto;` is in `lib.rs`
 
-The original Westwood implementation is in:
-- `CODE/BLOWFISH.H` / `CODE/BLOWFISH.CPP` - Blowfish cipher
-- `CODE/PK.H` / `CODE/PK.CPP` - RSA (PKey) implementation
-- `CODE/PKSTRAW.H` / `CODE/PKSTRAW.CPP` - Stream wrapper combining RSA+Blowfish
-- `CODE/BLWSTRAW.H` / `CODE/BLWSTRAW.CPP` - Blowfish stream wrapper
-- `CODE/MIXFILE.CPP` - MIX file loading with decryption
+### RSA decryption produces garbage
+- Verify public key modulus bytes are correct (Base64 decode)
+- Check big-endian byte ordering
+- Exponent should be 65537 (0x10001)
 
-The public key is defined in `CODE/CONST.CPP`:
-```cpp
-char const Keys[] =
-"[PublicKey]\n"
-"1=AihRvNoIbTn85FZRYNZRcT+i6KpU+maCsEqr3Q5q+LDB5tH7Tz2qQ38V\n"
-```
+### Blowfish decryption produces garbage
+- S-box tables must be exact copies from BLOWFISH.CPP
+- Block size is 8 bytes - data must be padded
+- Byte order is big-endian for block operations
+
+### File count is wrong after decryption
+- Encrypted header is padded to 8-byte boundary
+- First 6 bytes of decrypted header are: count (2) + size (4)
+- Remaining padding bytes should be ignored
+
+### Data section appears corrupted
+- Data section is NOT encrypted, only the header
+- Data offsets in entries are relative to data section start
+- Data start = 4 + 80 + 8 + padded_entries_size
 
 ## Completion Promise
+When verification passes, output:
+```
+<promise>TASK_12I_COMPLETE</promise>
+```
 
-When this task is complete:
-1. The crypto module will provide Blowfish and RSA decryption
-2. `MixFile::open()` will automatically decrypt encrypted MIX files
-3. All 20 MIX files in gamedata/ will be loadable
-4. The verification script will pass
-5. No changes to the C++ game code are required
+## Escape Hatch
+If stuck after 20 iterations:
+- Document what's blocking in `ralph-tasks/blocked/12i.md`
+- List attempted approaches
+- Output: `<promise>TASK_12I_BLOCKED</promise>`
 
-## Notes
+## Max Iterations
+20
 
-- The RSA implementation is minimal - only handles the specific key size used
-- Consider using the `num-bigint` crate for a more robust implementation
-- The Blowfish S-box constants are large (~4KB) - they come from digits of Pi
-- Data within MIX files is NOT encrypted, only the header/index
-- Some MIX files may have a SHA-1 digest at the end (flag 0x01) - we ignore it
+## Reference Files
+- `CODE/BLOWFISH.H` / `CODE/BLOWFISH.CPP` - Original Blowfish implementation
+- `CODE/PK.H` / `CODE/PK.CPP` - Original RSA implementation
+- `CODE/PKSTRAW.H` / `CODE/PKSTRAW.CPP` - Key decryption stream
+- `CODE/CONST.CPP` - Public key definition (line 814)
+- `CODE/MIXFILE.CPP` - MIX file loading with decryption (line 168-256)
