@@ -194,25 +194,33 @@ impl BigUint {
 
     /// Multiply by another BigUint
     fn mul(&self, other: &BigUint) -> BigUint {
-        let mut result = vec![0u64; self.digits.len() + other.digits.len()];
+        // Use u128 for intermediate results to prevent overflow when accumulating
+        // multiple u64 products in the same position
+        let mut result = vec![0u128; self.digits.len() + other.digits.len()];
 
         for (i, &a) in self.digits.iter().enumerate() {
             for (j, &b) in other.digits.iter().enumerate() {
-                let prod = (a as u64) * (b as u64);
+                let prod = (a as u128) * (b as u128);
                 result[i + j] += prod;
             }
         }
 
-        // Propagate carries
-        let mut carry = 0u64;
-        for digit in result.iter_mut() {
-            *digit += carry;
-            carry = *digit >> 32;
-            *digit &= 0xFFFFFFFF;
+        // Propagate carries and convert to u32
+        let mut digits = Vec::with_capacity(result.len());
+        let mut carry = 0u128;
+        for digit in result.iter() {
+            let sum = *digit + carry;
+            digits.push(sum as u32);
+            carry = sum >> 32;
         }
 
-        // Convert to u32 and trim
-        let mut digits: Vec<u32> = result.into_iter().map(|d| d as u32).collect();
+        // Handle any remaining carry
+        while carry > 0 {
+            digits.push(carry as u32);
+            carry >>= 32;
+        }
+
+        // Trim leading zeros
         while digits.len() > 1 && *digits.last().unwrap() == 0 {
             digits.pop();
         }
