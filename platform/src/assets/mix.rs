@@ -34,11 +34,15 @@
 //! ```
 
 use std::collections::HashMap;
-use std::io::{self, Read, Seek, SeekFrom};
 use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
+use crate::crypto::{decrypt_mix_key, BlowfishEngine};
 use crate::util::crc::westwood_crc_filename;
+
+/// Size of the RSA-encrypted key block in MIX files
+const RSA_KEY_BLOCK_SIZE: usize = 80;
 
 /// Error type for MIX file operations
 #[derive(Debug)]
@@ -47,7 +51,7 @@ pub enum MixError {
     InvalidHeader,
     InvalidFormat(String),
     FileNotFound(String),
-    EncryptedNotSupported,
+    DecryptionFailed(String),
 }
 
 impl From<io::Error> for MixError {
@@ -63,7 +67,7 @@ impl std::fmt::Display for MixError {
             MixError::InvalidHeader => write!(f, "Invalid MIX header"),
             MixError::InvalidFormat(msg) => write!(f, "Invalid format: {}", msg),
             MixError::FileNotFound(name) => write!(f, "File not found: {}", name),
-            MixError::EncryptedNotSupported => write!(f, "Encrypted MIX files not supported"),
+            MixError::DecryptionFailed(msg) => write!(f, "Decryption failed: {}", msg),
         }
     }
 }
@@ -108,55 +112,39 @@ pub struct MixHeader {
 }
 
 impl MixHeader {
-    /// Read MIX header from a reader
-    pub fn read<R: Read>(reader: &mut R) -> Result<Self, MixError> {
-        let mut buf = [0u8; 6];
-        reader.read_exact(&mut buf)?;
-
-        // Check for extended format (first two bytes are 0)
-        let first = i16::from_le_bytes([buf[0], buf[1]]);
-
-        if first == 0 {
-            // Extended format - read flags from second word
-            let second = i16::from_le_bytes([buf[2], buf[3]]);
-            let has_digest = (second & 0x01) != 0;
-            let is_encrypted = (second & 0x02) != 0;
-
-            if is_encrypted {
-                return Err(MixError::EncryptedNotSupported);
-            }
-
-            // Read actual file header
-            reader.read_exact(&mut buf)?;
-            let file_count = u16::from_le_bytes([buf[0], buf[1]]);
-            let data_size = u32::from_le_bytes([buf[2], buf[3], buf[4], buf[5]]);
-
-            Ok(MixHeader {
-                file_count,
-                data_size,
-                is_extended: true,
-                has_digest,
-                is_encrypted,
-            })
-        } else {
-            // Plain format - first bytes are already the header
-            let file_count = first as u16;
-            let data_size = u32::from_le_bytes([buf[2], buf[3], buf[4], buf[5]]);
-
-            Ok(MixHeader {
-                file_count,
-                data_size,
-                is_extended: false,
-                has_digest: false,
-                is_encrypted: false,
-            })
+    /// Read MIX header from a byte slice (already decrypted if needed)
+    pub fn from_bytes(data: &[u8]) -> Result<Self, MixError> {
+        if data.len() < 6 {
+            return Err(MixError::InvalidHeader);
         }
+
+        let file_count = u16::from_le_bytes([data[0], data[1]]);
+        let data_size = u32::from_le_bytes([data[2], data[3], data[4], data[5]]);
+
+        Ok(MixHeader {
+            file_count,
+            data_size,
+            is_extended: false,  // Will be set by caller
+            has_digest: false,   // Will be set by caller
+            is_encrypted: false, // Will be set by caller
+        })
     }
 
-    /// Calculate header size including entry table
+    /// Calculate header size including entry table (from start of file header, not flags)
     pub fn header_size(&self) -> u32 {
-        let base = if self.is_extended { 10 } else { 6 }; // 4 extra for extended flag bytes
-        base + (self.file_count as u32 * 12)
+        6 + (self.file_count as u32 * 12)
+    }
+
+    /// Calculate total bytes needed from start of file to data section
+    pub fn total_header_size(&self) -> u32 {
+        let mut size = self.header_size();
+        if self.is_extended {
+            size += 4; // 4 bytes for extended flags
+            if self.is_encrypted {
+                size += RSA_KEY_BLOCK_SIZE as u32; // 80 bytes for RSA key block
+            }
+        }
+        size
     }
 }
 
@@ -176,32 +164,74 @@ pub struct MixFile {
 
 impl MixFile {
     /// Open a MIX file and read its header
+    ///
+    /// Automatically handles encrypted MIX files by decrypting the header
+    /// using RSA to recover the Blowfish key, then Blowfish to decrypt
+    /// the file index.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, MixError> {
         let path_str = path.as_ref().to_string_lossy().to_string();
         let mut file = File::open(&path)?;
 
-        // Read header
-        let header = MixHeader::read(&mut file)?;
+        // Read first 4 bytes to detect format
+        let mut flag_buf = [0u8; 4];
+        file.read_exact(&mut flag_buf)?;
 
-        // Read entry table
-        let entry_count = header.file_count as usize;
-        let mut entries = Vec::with_capacity(entry_count);
+        let first = i16::from_le_bytes([flag_buf[0], flag_buf[1]]);
 
-        for _ in 0..entry_count {
-            let mut buf = [0u8; 12];
-            file.read_exact(&mut buf)?;
-            entries.push(MixEntry::from_bytes(&buf));
-        }
+        let (header, entries, data_start) = if first == 0 {
+            // Extended format
+            let flags = i16::from_le_bytes([flag_buf[2], flag_buf[3]]);
+            let has_digest = (flags & 0x01) != 0;
+            let is_encrypted = (flags & 0x02) != 0;
 
-        // Record data start position
-        let data_start = file.stream_position()?;
+            if is_encrypted {
+                // Read encrypted MIX file
+                Self::read_encrypted(&mut file, has_digest)?
+            } else {
+                // Extended but not encrypted - just read header normally
+                let mut header_buf = [0u8; 6];
+                file.read_exact(&mut header_buf)?;
 
-        // Entries should already be sorted by CRC in the file, but verify
-        // (signed comparison as per original code)
+                let mut header = MixHeader::from_bytes(&header_buf)?;
+                header.is_extended = true;
+                header.has_digest = has_digest;
+                header.is_encrypted = false;
+
+                // Read entry table
+                let entries = Self::read_entries(&mut file, header.file_count as usize)?;
+                let data_start = file.stream_position()?;
+
+                (header, entries, data_start)
+            }
+        } else {
+            // Plain format - first 4 bytes are part of header
+            // Read remaining 2 bytes
+            let mut extra = [0u8; 2];
+            file.read_exact(&mut extra)?;
+
+            let header_buf = [
+                flag_buf[0],
+                flag_buf[1],
+                flag_buf[2],
+                flag_buf[3],
+                extra[0],
+                extra[1],
+            ];
+
+            let header = MixHeader::from_bytes(&header_buf)?;
+
+            // Read entry table
+            let entries = Self::read_entries(&mut file, header.file_count as usize)?;
+            let data_start = file.stream_position()?;
+
+            (header, entries, data_start)
+        };
+
+        // Verify entries are sorted (debug only)
         #[cfg(debug_assertions)]
         {
             for i in 1..entries.len() {
-                if entries[i].crc < entries[i-1].crc {
+                if entries[i].crc < entries[i - 1].crc {
                     log::warn!("MIX entries not sorted at index {}", i);
                 }
             }
@@ -214,6 +244,113 @@ impl MixFile {
             data_start,
             cached_data: None,
         })
+    }
+
+    /// Read entries from a reader
+    fn read_entries<R: Read>(reader: &mut R, count: usize) -> Result<Vec<MixEntry>, MixError> {
+        let mut entries = Vec::with_capacity(count);
+
+        for _ in 0..count {
+            let mut buf = [0u8; 12];
+            reader.read_exact(&mut buf)?;
+            entries.push(MixEntry::from_bytes(&buf));
+        }
+
+        Ok(entries)
+    }
+
+    /// Read an encrypted MIX file header
+    ///
+    /// Layout:
+    /// - 80 bytes: RSA-encrypted Blowfish key block
+    /// - Blowfish-encrypted data (header + entries, padded to 8 bytes)
+    fn read_encrypted<R: Read + Seek>(
+        reader: &mut R,
+        has_digest: bool,
+    ) -> Result<(MixHeader, Vec<MixEntry>, u64), MixError> {
+        // Read RSA-encrypted key block (80 bytes)
+        let mut key_block = [0u8; RSA_KEY_BLOCK_SIZE];
+        reader.read_exact(&mut key_block)?;
+
+        // Decrypt to get Blowfish key
+        let bf_key = decrypt_mix_key(&key_block);
+
+        // Initialize Blowfish engine
+        let mut bf = BlowfishEngine::new();
+        bf.set_key(&bf_key);
+
+        // First, decrypt just the header (8 bytes to get file_count and data_size)
+        // The header is 6 bytes but Blowfish operates on 8-byte blocks
+        let mut header_block = [0u8; 8];
+        reader.read_exact(&mut header_block)?;
+        bf.decrypt(&mut header_block);
+
+        let file_count = u16::from_le_bytes([header_block[0], header_block[1]]);
+        let data_size = u32::from_le_bytes([
+            header_block[2],
+            header_block[3],
+            header_block[4],
+            header_block[5],
+        ]);
+
+        // Calculate how many more bytes we need for entries
+        // Each entry is 12 bytes, we already decrypted first 8 bytes
+        // Total encrypted = 6 (header) + file_count * 12, rounded up to 8
+        let total_index_size = 6 + (file_count as usize * 12);
+        let encrypted_size = (total_index_size + 7) & !7; // Round up to 8
+        let remaining_encrypted = encrypted_size - 8; // We already read 8 bytes
+
+        // Read and decrypt remaining data
+        let mut remaining_data = vec![0u8; remaining_encrypted];
+        reader.read_exact(&mut remaining_data)?;
+
+        // Decrypt in 8-byte blocks
+        for chunk in remaining_data.chunks_exact_mut(8) {
+            let block: &mut [u8; 8] = chunk.try_into().unwrap();
+            bf.decrypt(block);
+        }
+
+        // Combine decrypted data: first 8 bytes + remaining
+        // But we only need bytes starting from offset 6 (after header)
+        // header_block[6..8] contains first 2 bytes of first entry
+        // remaining_data contains the rest
+
+        let mut entries = Vec::with_capacity(file_count as usize);
+
+        // Build entry data from decrypted blocks
+        // First entry starts at byte 6, we have bytes 6-7 in header_block
+        let mut entry_data = Vec::with_capacity(file_count as usize * 12);
+        entry_data.extend_from_slice(&header_block[6..8]);
+        entry_data.extend_from_slice(&remaining_data);
+
+        // Parse entries
+        for i in 0..file_count as usize {
+            let start = i * 12;
+            if start + 12 > entry_data.len() {
+                return Err(MixError::DecryptionFailed(format!(
+                    "Not enough data for entry {}",
+                    i
+                )));
+            }
+            let entry_bytes: [u8; 12] = entry_data[start..start + 12]
+                .try_into()
+                .map_err(|_| MixError::DecryptionFailed("Entry conversion failed".to_string()))?;
+            entries.push(MixEntry::from_bytes(&entry_bytes));
+        }
+
+        // Calculate data start position
+        // 4 (extended flags) + 80 (RSA block) + encrypted_size
+        let data_start = reader.stream_position()?;
+
+        let header = MixHeader {
+            file_count,
+            data_size,
+            is_extended: true,
+            has_digest,
+            is_encrypted: true,
+        };
+
+        Ok((header, entries, data_start))
     }
 
     /// Cache the entire data section in memory
@@ -269,7 +406,8 @@ impl MixFile {
 
     /// Read file data from the archive
     pub fn read(&self, filename: &str) -> Result<Vec<u8>, MixError> {
-        let entry = self.find(filename)
+        let entry = self
+            .find(filename)
             .ok_or_else(|| MixError::FileNotFound(filename.to_string()))?;
 
         self.read_entry(entry)
@@ -283,10 +421,12 @@ impl MixFile {
             let end = start + entry.size as usize;
 
             if end > data.len() {
-                return Err(MixError::InvalidFormat(
-                    format!("Entry offset {} + size {} exceeds data size {}",
-                            entry.offset, entry.size, data.len())
-                ));
+                return Err(MixError::InvalidFormat(format!(
+                    "Entry offset {} + size {} exceeds data size {}",
+                    entry.offset,
+                    entry.size,
+                    data.len()
+                )));
             }
 
             return Ok(data[start..end].to_vec());
@@ -304,7 +444,8 @@ impl MixFile {
 
     /// Read file data by CRC
     pub fn read_by_crc(&self, crc: i32) -> Result<Vec<u8>, MixError> {
-        let entry = self.find_by_crc(crc)
+        let entry = self
+            .find_by_crc(crc)
             .ok_or_else(|| MixError::FileNotFound(format!("CRC 0x{:08X}", crc)))?;
 
         self.read_entry(entry)
@@ -499,5 +640,18 @@ mod tests {
         let manager = MixManager::default();
         assert_eq!(manager.mix_count(), 0);
         assert!(!manager.exists("test.dat"));
+    }
+
+    #[test]
+    fn test_mix_header_from_bytes() {
+        // file_count = 10, data_size = 0x1000
+        let data = [
+            0x0A, 0x00, // file_count = 10
+            0x00, 0x10, 0x00, 0x00, // data_size = 0x1000
+        ];
+        let header = MixHeader::from_bytes(&data).unwrap();
+        assert_eq!(header.file_count, 10);
+        assert_eq!(header.data_size, 0x1000);
+        assert_eq!(header.header_size(), 6 + 10 * 12); // 126 bytes
     }
 }

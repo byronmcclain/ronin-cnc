@@ -13,6 +13,7 @@ pub mod audio;
 pub mod blit;
 pub mod compression;
 pub mod config;
+pub mod crypto;
 pub mod error;
 pub mod ffi;
 pub mod files;

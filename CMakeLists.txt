@@ -228,8 +228,42 @@ if(APPLE)
     )
 endif()
 
+# =============================================================================
+# MIX Decryption Test (Phase 12i)
+# =============================================================================
+
+add_executable(TestMixDecrypt src/test_mix_decrypt.cpp)
+
+target_include_directories(TestMixDecrypt PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+add_dependencies(TestMixDecrypt generate_headers)
+
+target_link_libraries(TestMixDecrypt PRIVATE redalert_platform)
+
+if(APPLE)
+    target_link_libraries(TestMixDecrypt PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
 # Enable testing
 enable_testing()
 add_test(NAME PlatformTests COMMAND TestPlatform)
 add_test(NAME PlatformQuickTests COMMAND TestPlatform --quick)
 add_test(NAME AssetTests COMMAND TestAssets)
+add_test(NAME MixDecryptTests COMMAND TestMixDecrypt)
