@@ -29,6 +29,12 @@
 #define DEFAULT_SHADOW_INTENSITY 0.5
 
 /**
+ * Magic number for packet validation
+ * Original: 0xDABD for serial, various for network
+ */
+#define PACKET_MAGIC 49374
+
+/**
  * Initial CRC value for streaming calculation
  */
 #define CRC_INIT 4294967295
@@ -123,6 +129,20 @@ typedef enum SeekOrigin {
 } SeekOrigin;
 
 /**
+ * Network Manager
+ *
+ * Manages the network session state and provides unified host/client API.
+ */
+typedef struct NetworkManager NetworkManager;
+
+/**
+ * Platform network client
+ *
+ * Connects to a network host and exchanges packets.
+ */
+typedef struct PlatformClient PlatformClient;
+
+/**
  * Directory iterator
  */
 typedef struct PlatformDir PlatformDir;
@@ -131,6 +151,13 @@ typedef struct PlatformDir PlatformDir;
  * Platform file handle
  */
 typedef struct PlatformFile PlatformFile;
+
+/**
+ * Platform network host (server)
+ *
+ * Wraps an enet::Host and manages peer connections.
+ */
+typedef struct PlatformHost PlatformHost;
 
 /**
  * Display mode configuration
@@ -228,6 +255,174 @@ extern "C" {
 #endif // __cplusplus
 
 /**
+ * Get the current application state
+ *
+ * # Returns
+ * - 0: Active (foreground)
+ * - 1: Background
+ * - 2: Terminating
+ */
+int Platform_GetAppState(void);
+
+/**
+ * Check if application is active (foreground)
+ *
+ * # Returns
+ * - 1 if active
+ * - 0 if not active (background or terminating)
+ */
+int Platform_IsAppActive(void);
+
+/**
+ * Check if application is in background
+ *
+ * # Returns
+ * - 1 if in background
+ * - 0 if not in background
+ */
+int Platform_IsAppBackground(void);
+
+/**
+ * Request application quit
+ *
+ * Sets a flag that should be checked each frame with Platform_ShouldQuit().
+ * The game should save state and exit gracefully.
+ */
+void Platform_RequestQuit(void);
+
+/**
+ * Check if quit has been requested
+ *
+ * The main game loop should check this each frame:
+ * ```c
+ * while (!Platform_ShouldQuit()) {
+ *     // game loop
+ * }
+ * ```
+ *
+ * # Returns
+ * - 1 if quit requested
+ * - 0 if not
+ */
+int Platform_ShouldQuit(void);
+
+/**
+ * Clear quit request
+ *
+ * Call if quit was cancelled (e.g., user declined to save).
+ */
+void Platform_ClearQuitRequest(void);
+
+/**
+ * Process application events for lifecycle changes
+ *
+ * This should be called by the input processing code for each SDL event.
+ * It handles app lifecycle events and updates state accordingly.
+ *
+ * # Returns
+ * - The new AppState value if state changed
+ * - -1 if no state change
+ */
+int Platform_HandleAppEvent(void);
+
+/**
+ * Get the configuration directory path
+ *
+ * Copies the path to the provided buffer.
+ *
+ * # Parameters
+ * - `buffer`: Output buffer for null-terminated UTF-8 path string
+ * - `buffer_size`: Size of buffer in bytes
+ *
+ * # Returns
+ * - Number of bytes written (excluding null) on success
+ * - -1 on error (null buffer or insufficient size)
+ *
+ * # Example Path
+ * `/Users/username/Library/Application Support/RedAlert`
+ */
+int32_t Platform_GetConfigPath(char *buffer, int32_t buffer_size);
+
+/**
+ * Get the saves directory path
+ *
+ * # Parameters
+ * - `buffer`: Output buffer for null-terminated UTF-8 path string
+ * - `buffer_size`: Size of buffer in bytes
+ *
+ * # Returns
+ * - Number of bytes written (excluding null) on success
+ * - -1 on error
+ *
+ * # Example Path
+ * `/Users/username/Library/Application Support/RedAlert/saves`
+ */
+int32_t Platform_GetSavesPath(char *buffer, int32_t buffer_size);
+
+/**
+ * Get the log files directory path
+ *
+ * # Parameters
+ * - `buffer`: Output buffer for null-terminated UTF-8 path string
+ * - `buffer_size`: Size of buffer in bytes
+ *
+ * # Returns
+ * - Number of bytes written (excluding null) on success
+ * - -1 on error
+ *
+ * # Example Path
+ * `/Users/username/Library/Application Support/RedAlert/logs`
+ */
+int32_t Platform_GetLogPath(char *buffer, int32_t buffer_size);
+
+/**
+ * Get the cache directory path
+ *
+ * # Parameters
+ * - `buffer`: Output buffer for null-terminated UTF-8 path string
+ * - `buffer_size`: Size of buffer in bytes
+ *
+ * # Returns
+ * - Number of bytes written (excluding null) on success
+ * - -1 on error
+ *
+ * # Example Path
+ * `/Users/username/Library/Caches/RedAlert`
+ */
+int32_t Platform_GetCachePath(char *buffer, int32_t buffer_size);
+
+/**
+ * Get the game data directory path
+ *
+ * Searches for data in standard locations and returns the first that exists.
+ *
+ * # Parameters
+ * - `buffer`: Output buffer for null-terminated UTF-8 path string
+ * - `buffer_size`: Size of buffer in bytes
+ *
+ * # Returns
+ * - Number of bytes written (excluding null) on success
+ * - -1 on error
+ *
+ * # Search Order
+ * 1. App bundle Resources/data/
+ * 2. ./data/
+ * 3. ../data/
+ */
+int32_t Platform_GetDataPath(char *buffer, int32_t buffer_size);
+
+/**
+ * Ensure all configuration directories exist
+ *
+ * Creates the config, saves, logs, and cache directories if they don't exist.
+ *
+ * # Returns
+ * - 0 on success (all directories exist or were created)
+ * - -1 on error (failed to create one or more directories)
+ */
+int32_t Platform_EnsureDirectories(void);
+
+/**
  * Initialize the platform layer
  */
 enum PlatformResult Platform_Init(void);
@@ -272,6 +467,7 @@ void Platform_ClearError(void);
 
 /**
  * Log a message at the specified level
+ * Uses the new logging infrastructure from crate::logging
  */
 void Platform_Log(enum LogLevel level, const char *msg);
 
@@ -1308,6 +1504,655 @@ int32_t Platform_Random_Range(int32_t min, int32_t max);
  * Get random number in range [0, max)
  */
 uint32_t Platform_Random_Max(uint32_t max);
+
+/**
+ * Check if running on a Retina/HiDPI display
+ *
+ * # Returns
+ * - 1 if Retina display (scale factor > 1)
+ * - 0 if standard display
+ * - -1 if graphics not initialized
+ */
+int Platform_IsRetinaDisplay(void);
+
+/**
+ * Get the display scale factor
+ *
+ * On Retina displays, this is typically 2.0.
+ * On standard displays, this is 1.0.
+ *
+ * # Parameters
+ * - `scale_x`: Output pointer for X scale factor (nullable)
+ * - `scale_y`: Output pointer for Y scale factor (nullable)
+ *
+ * # Returns
+ * - 0 on success
+ * - -1 if graphics not initialized
+ */
+int Platform_GetDisplayScale(float *scale_x, float *scale_y);
+
+/**
+ * Toggle fullscreen mode
+ *
+ * Switches between windowed and desktop fullscreen.
+ *
+ * # Returns
+ * - 0 on success
+ * - -1 if failed or graphics not initialized
+ */
+int Platform_ToggleFullscreen(void);
+
+/**
+ * Set fullscreen mode explicitly
+ *
+ * # Parameters
+ * - `fullscreen`: 0 for windowed, non-zero for fullscreen
+ *
+ * # Returns
+ * - 0 on success
+ * - -1 if failed or graphics not initialized
+ */
+int Platform_SetFullscreen(int fullscreen);
+
+/**
+ * Check if currently in fullscreen mode
+ *
+ * # Returns
+ * - 1 if fullscreen
+ * - 0 if windowed
+ * - -1 if graphics not initialized
+ */
+int Platform_IsFullscreen(void);
+
+/**
+ * Get window size in logical pixels (points)
+ *
+ * # Parameters
+ * - `width`: Output pointer for width (nullable)
+ * - `height`: Output pointer for height (nullable)
+ *
+ * # Returns
+ * - 0 on success
+ * - -1 if graphics not initialized
+ */
+int Platform_GetWindowSize(int *width, int *height);
+
+/**
+ * Get drawable size in physical pixels
+ *
+ * On Retina displays, this is larger than window size.
+ *
+ * # Parameters
+ * - `width`: Output pointer for width (nullable)
+ * - `height`: Output pointer for height (nullable)
+ *
+ * # Returns
+ * - 0 on success
+ * - -1 if graphics not initialized
+ */
+int Platform_GetDrawableSize(int *width, int *height);
+
+/**
+ * Get the fullscreen state
+ *
+ * # Returns
+ * - 0: Windowed
+ * - 1: True fullscreen (exclusive)
+ * - 2: Desktop fullscreen (borderless)
+ * - -1: Graphics not initialized
+ */
+int Platform_GetFullscreenState(void);
+
+/**
+ * Initialize the logging system
+ *
+ * Creates a timestamped log file in the standard logs directory.
+ * Should be called early in program startup.
+ *
+ * # Returns
+ * - 0 on success
+ * - -1 if already initialized
+ * - -2 if failed to create log file
+ * - -3 if failed to create log directory
+ */
+int32_t Platform_Log_Init(void);
+
+/**
+ * Shutdown the logging system
+ *
+ * Flushes buffered data and closes the log file.
+ * Safe to call multiple times.
+ */
+void Platform_Log_Shutdown(void);
+
+/**
+ * Log a message by level number
+ *
+ * # Parameters
+ * - `level`: Log level (0=Error, 1=Warn, 2=Info, 3=Debug, 4=Trace)
+ * - `message`: Null-terminated UTF-8 message string
+ *
+ * # Safety
+ * - `message` must be a valid null-terminated C string
+ * - `message` must point to valid memory for the duration of the call
+ *
+ * Note: Use Platform_Log (from ffi module) for enum-based logging,
+ * or this function for integer-based level specification.
+ */
+void Platform_LogMessage(int32_t level, const char *message);
+
+/**
+ * Log a formatted message (convenience function)
+ *
+ * Logs at INFO level with a module prefix.
+ *
+ * # Parameters
+ * - `module`: Null-terminated module name (e.g., "graphics", "network")
+ * - `message`: Null-terminated message string
+ */
+void Platform_Log_Info(const char *module, const char *message);
+
+/**
+ * Set the log level
+ *
+ * # Parameters
+ * - `level`: 0=Error (least verbose), 1=Warn, 2=Info, 3=Debug, 4=Trace (most verbose)
+ *
+ * Default level is 2 (Info).
+ */
+void Platform_Log_SetLevel(int32_t level);
+
+/**
+ * Get the current log level
+ *
+ * # Returns
+ * Current log level (0-4)
+ */
+int32_t Platform_Log_GetLevel(void);
+
+/**
+ * Flush log buffer to disk
+ *
+ * Call this periodically or before program exit to ensure
+ * all log messages are written to the file.
+ */
+void Platform_Log_Flush(void);
+
+/**
+ * Initialize the network subsystem
+ *
+ * # Returns
+ * - 0 on success
+ * - -1 if already initialized
+ * - -2 if enet initialization failed
+ */
+int32_t Platform_Network_Init(void);
+
+/**
+ * Shutdown the network subsystem
+ */
+void Platform_Network_Shutdown(void);
+
+/**
+ * Check if network is initialized
+ *
+ * # Returns
+ * - 1 if initialized
+ * - 0 if not initialized
+ */
+int32_t Platform_Network_IsInitialized(void);
+
+/**
+ * Create a new network client
+ *
+ * # Arguments
+ * * `channel_count` - Number of channels (should match server)
+ *
+ * # Returns
+ * * Pointer to PlatformClient on success
+ * * null on failure
+ */
+struct PlatformClient *Platform_Client_Create(int32_t channel_count);
+
+/**
+ * Destroy a network client
+ *
+ * # Safety
+ * * `client` must be a valid pointer from Platform_Client_Create
+ */
+void Platform_Client_Destroy(struct PlatformClient *client);
+
+/**
+ * Connect to a server (async)
+ *
+ * Starts connection process. Call Service to complete.
+ *
+ * # Arguments
+ * * `client` - Client pointer
+ * * `address` - Server address (C string, e.g., "127.0.0.1")
+ * * `port` - Server port
+ *
+ * # Returns
+ * * 0 on success (connection initiated)
+ * * -1 on error
+ */
+int32_t Platform_Client_Connect(struct PlatformClient *client, const char *address, uint16_t port);
+
+/**
+ * Connect to a server (blocking)
+ *
+ * Blocks until connected or timeout.
+ *
+ * # Returns
+ * * 0 on success
+ * * -1 on error or timeout
+ */
+int32_t Platform_Client_ConnectBlocking(struct PlatformClient *client,
+                                        const char *address,
+                                        uint16_t port,
+                                        uint32_t timeout_ms);
+
+/**
+ * Service the client (process events)
+ *
+ * # Returns
+ * * 0 = No event
+ * * 1 = Connected
+ * * 2 = Disconnected
+ * * 3 = Packet received
+ * * 4 = Connection failed
+ * * -1 = Error
+ */
+int32_t Platform_Client_Service(struct PlatformClient *client, uint32_t timeout_ms);
+
+/**
+ * Check if client is connected
+ *
+ * # Returns
+ * * 1 if connected
+ * * 0 if not connected
+ */
+int32_t Platform_Client_IsConnected(struct PlatformClient *client);
+
+/**
+ * Get client connection state
+ *
+ * # Returns
+ * * 0 = Disconnected
+ * * 1 = Connecting
+ * * 2 = Connected
+ * * 3 = Failed
+ */
+int32_t Platform_Client_GetState(struct PlatformClient *client);
+
+/**
+ * Send data to server
+ *
+ * # Arguments
+ * * `client` - Client pointer
+ * * `channel` - Channel to send on
+ * * `data` - Packet data
+ * * `size` - Data size
+ * * `reliable` - 1 for reliable, 0 for unreliable
+ *
+ * # Returns
+ * * 0 on success
+ * * -1 on error
+ */
+int32_t Platform_Client_Send(struct PlatformClient *client,
+                             uint8_t channel,
+                             const uint8_t *data,
+                             int32_t size,
+                             int32_t reliable);
+
+/**
+ * Receive data from server
+ *
+ * # Arguments
+ * * `client` - Client pointer
+ * * `buffer` - Buffer to receive into
+ * * `buffer_size` - Size of buffer
+ *
+ * # Returns
+ * * Positive: bytes received
+ * * 0: no data available
+ * * -1: error
+ */
+int32_t Platform_Client_Receive(struct PlatformClient *client,
+                                uint8_t *buffer,
+                                int32_t buffer_size);
+
+/**
+ * Check if client has packets waiting
+ */
+int32_t Platform_Client_HasPackets(struct PlatformClient *client);
+
+/**
+ * Disconnect from server
+ */
+void Platform_Client_Disconnect(struct PlatformClient *client);
+
+/**
+ * Flush pending outgoing packets
+ */
+void Platform_Client_Flush(struct PlatformClient *client);
+
+/**
+ * Create a new network host
+ *
+ * # Arguments
+ * * `port` - Port to bind to
+ * * `max_clients` - Maximum number of clients
+ * * `channel_count` - Number of channels
+ *
+ * # Returns
+ * * Pointer to PlatformHost on success
+ * * null on failure
+ */
+struct PlatformHost *Platform_Host_Create(uint16_t port,
+                                          int32_t max_clients,
+                                          int32_t channel_count);
+
+/**
+ * Destroy a network host
+ *
+ * # Safety
+ * * `host` must be a valid pointer from Platform_Host_Create
+ * * `host` must not be used after this call
+ */
+void Platform_Host_Destroy(struct PlatformHost *host);
+
+/**
+ * Service the host (process events)
+ *
+ * # Returns
+ * * 0 = No event
+ * * 1 = Peer connected
+ * * 2 = Peer disconnected
+ * * 3 = Packet received
+ * * -1 = Error or null host
+ */
+int32_t Platform_Host_Service(struct PlatformHost *host, uint32_t timeout_ms);
+
+/**
+ * Receive a packet from the host
+ *
+ * # Arguments
+ * * `host` - Host pointer
+ * * `peer_index` - Output: peer that sent the packet
+ * * `channel` - Output: channel packet was received on
+ * * `buffer` - Buffer to copy packet data into
+ * * `buffer_size` - Size of buffer
+ *
+ * # Returns
+ * * Positive: number of bytes copied
+ * * 0: no packet available
+ * * -1: error or null pointers
+ */
+int32_t Platform_Host_Receive(struct PlatformHost *host,
+                              uint32_t *peer_index,
+                              uint8_t *channel,
+                              uint8_t *buffer,
+                              int32_t buffer_size);
+
+/**
+ * Check if host has packets waiting
+ *
+ * # Returns
+ * * 1 if packets available
+ * * 0 if no packets
+ * * -1 on error
+ */
+int32_t Platform_Host_HasPackets(struct PlatformHost *host);
+
+/**
+ * Broadcast a packet to all connected peers
+ *
+ * # Arguments
+ * * `host` - Host pointer
+ * * `channel` - Channel to send on
+ * * `data` - Packet data
+ * * `size` - Size of data
+ * * `reliable` - 1 for reliable, 0 for unreliable
+ *
+ * # Returns
+ * * 0 on success
+ * * -1 on error
+ */
+int32_t Platform_Host_Broadcast(struct PlatformHost *host,
+                                uint8_t channel,
+                                const uint8_t *data,
+                                int32_t size,
+                                int32_t reliable);
+
+/**
+ * Get number of connected peers
+ */
+int32_t Platform_Host_PeerCount(struct PlatformHost *host);
+
+/**
+ * Get the port the host is bound to
+ */
+uint16_t Platform_Host_GetPort(struct PlatformHost *host);
+
+/**
+ * Flush all pending outgoing packets
+ */
+void Platform_Host_Flush(struct PlatformHost *host);
+
+/**
+ * Create a new network manager
+ *
+ * Returns pointer to manager, or null on failure
+ */
+struct NetworkManager *Platform_NetworkManager_Create(void);
+
+/**
+ * Destroy a network manager
+ *
+ * # Safety
+ * * `manager` must be a valid pointer from Platform_NetworkManager_Create
+ */
+void Platform_NetworkManager_Destroy(struct NetworkManager *manager);
+
+/**
+ * Initialize the network manager (compatibility alias)
+ */
+int32_t Platform_NetworkManager_Init(void);
+
+/**
+ * Shutdown the network manager (compatibility alias)
+ */
+void Platform_NetworkManager_Shutdown(struct NetworkManager *manager);
+
+/**
+ * Get current network mode
+ *
+ * Returns: 0=None, 1=Hosting, 2=Joined, -1=error
+ */
+int32_t Platform_NetworkManager_GetMode(struct NetworkManager *manager);
+
+/**
+ * Host a new game
+ *
+ * Returns 0 on success, -1 on error
+ */
+int32_t Platform_NetworkManager_HostGame(struct NetworkManager *manager,
+                                         const char *name,
+                                         uint16_t port,
+                                         int32_t max_players);
+
+/**
+ * Join an existing game
+ *
+ * Returns 0 on success, -1 on error
+ */
+int32_t Platform_NetworkManager_JoinGame(struct NetworkManager *manager,
+                                         const char *address,
+                                         uint16_t port,
+                                         uint32_t timeout_ms);
+
+/**
+ * Join a game asynchronously
+ */
+int32_t Platform_NetworkManager_JoinGameAsync(struct NetworkManager *manager,
+                                              const char *address,
+                                              uint16_t port);
+
+/**
+ * Disconnect from current session
+ */
+void Platform_NetworkManager_Disconnect(struct NetworkManager *manager);
+
+/**
+ * Update network - call every frame
+ *
+ * Returns number of packets received, or -1 on error
+ */
+int32_t Platform_NetworkManager_Update(struct NetworkManager *manager);
+
+/**
+ * Check if hosting
+ */
+int32_t Platform_NetworkManager_IsHost(struct NetworkManager *manager);
+
+/**
+ * Check if connected
+ */
+int32_t Platform_NetworkManager_IsConnected(struct NetworkManager *manager);
+
+/**
+ * Get peer count
+ */
+int32_t Platform_NetworkManager_PeerCount(struct NetworkManager *manager);
+
+/**
+ * Send data
+ *
+ * Returns 0 on success, -1 on error
+ */
+int32_t Platform_NetworkManager_SendData(struct NetworkManager *manager,
+                                         uint8_t channel,
+                                         const uint8_t *data,
+                                         int32_t size,
+                                         int32_t reliable);
+
+/**
+ * Receive data
+ *
+ * Returns bytes copied, 0 if no data, -1 on error
+ */
+int32_t Platform_NetworkManager_ReceiveData(struct NetworkManager *manager,
+                                            uint32_t *peer_id,
+                                            uint8_t *channel,
+                                            uint8_t *buffer,
+                                            int32_t buffer_size);
+
+/**
+ * Check if packets are available
+ */
+int32_t Platform_NetworkManager_HasPackets(struct NetworkManager *manager);
+
+/**
+ * Get local player ID
+ */
+int32_t Platform_NetworkManager_GetLocalPlayerId(struct NetworkManager *manager);
+
+/**
+ * Create a game packet header
+ *
+ * Returns 0 on success, writes header to output buffer
+ */
+int32_t Platform_Packet_CreateHeader(uint8_t code,
+                                     uint32_t sequence,
+                                     uint8_t player_id,
+                                     uint8_t *out_header,
+                                     int32_t *out_size);
+
+/**
+ * Get the size of a packet header
+ */
+int32_t Platform_Packet_HeaderSize(void);
+
+/**
+ * Validate a packet header
+ *
+ * Returns 1 if valid, 0 if invalid
+ */
+int32_t Platform_Packet_ValidateHeader(const uint8_t *data, int32_t size);
+
+/**
+ * Extract header fields from raw packet data
+ *
+ * Returns 0 on success, -1 on error
+ */
+int32_t Platform_Packet_ParseHeader(const uint8_t *data,
+                                    int32_t size,
+                                    uint8_t *out_code,
+                                    uint32_t *out_sequence,
+                                    uint8_t *out_player_id);
+
+/**
+ * Get pointer to payload data within a packet
+ *
+ * Returns pointer to payload start, or null on error
+ * Sets out_payload_size to payload size
+ */
+const uint8_t *Platform_Packet_GetPayload(const uint8_t *data,
+                                          int32_t size,
+                                          int32_t *out_payload_size);
+
+/**
+ * Build a complete packet from header and payload
+ *
+ * Returns bytes written, or -1 on error
+ */
+int32_t Platform_Packet_Build(uint8_t code,
+                              uint32_t sequence,
+                              uint8_t player_id,
+                              const uint8_t *payload,
+                              int32_t payload_size,
+                              uint8_t *out_buffer,
+                              int32_t buffer_size);
+
+/**
+ * Get current FPS
+ *
+ * # Returns
+ * Current frames per second as integer (truncated)
+ */
+int Platform_GetFPS(void);
+
+/**
+ * Get last frame time in milliseconds
+ *
+ * # Returns
+ * Frame time in milliseconds (truncated to integer)
+ */
+int Platform_GetFrameTime(void);
+
+/**
+ * Get total frame count
+ *
+ * # Returns
+ * Total number of frames rendered
+ */
+uint64_t Platform_GetFrameCount(void);
+
+/**
+ * Mark the start of a frame
+ *
+ * Call at the beginning of each game loop iteration.
+ */
+void Platform_FrameStart(void);
+
+/**
+ * Mark the end of a frame
+ *
+ * Call at the end of each game loop iteration.
+ * This updates the FPS and frame time counters.
+ */
+void Platform_FrameEnd(void);
 
 #ifdef __cplusplus
 } // extern "C"

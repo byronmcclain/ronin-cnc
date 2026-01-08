@@ -11,6 +11,11 @@ fn main() {
     println!("cargo:rerun-if-changed=src/ffi/mod.rs");
     println!("cargo:rerun-if-changed=src/graphics/mod.rs");
     println!("cargo:rerun-if-changed=src/graphics/surface.rs");
+    println!("cargo:rerun-if-changed=src/network/mod.rs");
+    println!("cargo:rerun-if-changed=src/network/host.rs");
+    println!("cargo:rerun-if-changed=src/network/client.rs");
+    println!("cargo:rerun-if-changed=src/network/packet.rs");
+    println!("cargo:rerun-if-changed=src/network/manager.rs");
     println!("cargo:rerun-if-changed=cbindgen.toml");
 }
 

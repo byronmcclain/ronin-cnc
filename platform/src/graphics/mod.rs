@@ -1,10 +1,31 @@
 //! Graphics subsystem using SDL2
 
+pub mod display;
 pub mod palette;
 pub mod surface;
 
 pub use palette::{Palette, PaletteEntry};
 pub use surface::Surface;
+
+// Re-export display types and functions
+pub use display::{
+    DisplayScale, DrawableSize, FullscreenState, WindowSize,
+    get_display_scale, get_drawable_size, get_fullscreen_state,
+    get_window_size, is_fullscreen, is_retina_display,
+    set_fullscreen, toggle_fullscreen,
+};
+
+// Re-export display FFI functions
+pub use display::{
+    Platform_IsRetinaDisplay,
+    Platform_GetDisplayScale,
+    Platform_ToggleFullscreen,
+    Platform_SetFullscreen,
+    Platform_IsFullscreen,
+    Platform_GetWindowSize,
+    Platform_GetDrawableSize,
+    Platform_GetFullscreenState,
+};
 
 use crate::error::PlatformError;
 use crate::input;

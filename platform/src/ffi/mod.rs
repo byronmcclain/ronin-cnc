@@ -148,6 +148,7 @@ pub extern "C" fn Platform_ClearError() {
 // =============================================================================
 
 /// Log a message at the specified level
+/// Uses the new logging infrastructure from crate::logging
 #[no_mangle]
 pub unsafe extern "C" fn Platform_Log(level: LogLevel, msg: *const c_char) {
     if msg.is_null() {
@@ -159,12 +160,17 @@ pub unsafe extern "C" fn Platform_Log(level: LogLevel, msg: *const c_char) {
         Err(_) => return,
     };
 
-    match level {
-        LogLevel::Debug => eprintln!("[DEBUG] {}", msg_str),
-        LogLevel::Info => eprintln!("[INFO] {}", msg_str),
-        LogLevel::Warn => eprintln!("[WARN] {}", msg_str),
-        LogLevel::Error => eprintln!("[ERROR] {}", msg_str),
-    }
+    // Convert LogLevel enum to u8 for the logging module
+    // LogLevel: Debug=0, Info=1, Warn=2, Error=3
+    // logging module: Error=0, Warn=1, Info=2, Debug=3, Trace=4
+    let log_level = match level {
+        LogLevel::Debug => 3,
+        LogLevel::Info => 2,
+        LogLevel::Warn => 1,
+        LogLevel::Error => 0,
+    };
+
+    crate::logging::log_message(log_level, msg_str);
 }
 
 /// Log a formatted debug message

@@ -7,15 +7,20 @@
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
+pub mod app;
 pub mod audio;
 pub mod blit;
 pub mod compression;
+pub mod config;
 pub mod error;
 pub mod ffi;
 pub mod files;
 pub mod graphics;
 pub mod input;
+pub mod logging;
 pub mod memory;
+pub mod network;
+pub mod perf;
 pub mod timer;
 pub mod util;
 
@@ -44,6 +49,58 @@ pub enum PlatformResult {
 
 // Re-export FFI functions at crate root for cbindgen
 pub use ffi::*;
+
+// Re-export config FFI functions
+pub use config::{
+    Platform_GetConfigPath,
+    Platform_GetSavesPath,
+    Platform_GetLogPath,
+    Platform_GetCachePath,
+    Platform_GetDataPath,
+    Platform_EnsureDirectories,
+};
+
+// Re-export logging FFI functions
+pub use logging::{
+    Platform_Log_Init,
+    Platform_Log_Shutdown,
+    Platform_LogMessage,
+    Platform_Log_Info,
+    Platform_Log_SetLevel,
+    Platform_Log_GetLevel,
+    Platform_Log_Flush,
+};
+
+// Re-export display FFI functions
+pub use graphics::{
+    Platform_IsRetinaDisplay,
+    Platform_GetDisplayScale,
+    Platform_ToggleFullscreen,
+    Platform_SetFullscreen,
+    Platform_IsFullscreen,
+    Platform_GetWindowSize,
+    Platform_GetDrawableSize,
+    Platform_GetFullscreenState,
+};
+
+// Re-export app lifecycle FFI functions
+pub use app::{
+    Platform_GetAppState,
+    Platform_IsAppActive,
+    Platform_IsAppBackground,
+    Platform_RequestQuit,
+    Platform_ShouldQuit,
+    Platform_ClearQuitRequest,
+};
+
+// Re-export perf/timing FFI functions
+pub use perf::{
+    Platform_GetFPS,
+    Platform_GetFrameTime,
+    Platform_FrameStart,
+    Platform_FrameEnd,
+    Platform_GetFrameCount,
+};
 
 #[cfg(test)]
 mod tests {

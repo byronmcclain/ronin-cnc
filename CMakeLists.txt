@@ -161,3 +161,41 @@ if(APPLE)
         iconv
     )
 endif()
+
+# =============================================================================
+# Platform Integration Test
+# =============================================================================
+
+add_executable(TestPlatform src/test_platform.cpp)
+
+target_include_directories(TestPlatform PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+add_dependencies(TestPlatform generate_headers)
+
+target_link_libraries(TestPlatform PRIVATE redalert_platform)
+
+if(APPLE)
+    target_link_libraries(TestPlatform PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+# Enable testing
+enable_testing()
+add_test(NAME PlatformTests COMMAND TestPlatform)
+add_test(NAME PlatformQuickTests COMMAND TestPlatform --quick)

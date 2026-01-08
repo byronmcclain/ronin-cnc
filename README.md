@@ -1,39 +1,138 @@
+# Command & Conquer: Red Alert - macOS Port
 
-# Command & Conquer Red Alert
+A modern macOS port of the classic 1996 real-time strategy game by Westwood Studios.
 
-This repository includes source code for Command & Conquer Red Alert. This release provides support to the [Steam Workshop](https://steamcommunity.com/workshop/browse/?appid=2229840) for the game.
+![macOS](https://img.shields.io/badge/macOS-10.15%2B-blue)
+![Architecture](https://img.shields.io/badge/arch-Intel%20%7C%20Apple%20Silicon-green)
+![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
+## Features
 
-## Dependencies
+- **Native macOS Support**: Runs natively on Intel and Apple Silicon Macs
+- **Modern Platform Layer**: Built with Rust for safety and performance
+- **SDL2 Graphics**: Hardware-accelerated rendering
+- **Retina Display Support**: Crisp graphics on HiDPI displays
+- **Cross-Platform Audio**: Modern audio using rodio
+- **Reliable Networking**: UDP networking via enet
 
-If you wish to rebuild the source code and tools successfully you will need to find or write new replacements (or remove the code using them entirely) for the following libraries;
+## Quick Start
 
-- DirectX 5 SDK
-- DirectX Media 5.1 SDK
-- Greenleaf Communications Library (GCL)
-- Human Machine Interface (HMI) “Sound Operating System” (SOS)
+### Requirements
 
+- macOS 10.15 (Catalina) or later
+- Original Red Alert game data files
 
-## Compiling (Win32 Only)
+### Installation
 
-The current state of the source code does not fully compile and will require some effort to restore it. If you wish to restore the original build environment, the following tools are required;
+1. Download the latest release from [Releases](../../releases)
+2. Drag `Red Alert.app` to your Applications folder
+3. Copy your game data files to:
+   ```
+   ~/Library/Application Support/RedAlert/data/
+   ```
+4. Double-click to run
 
-- Watcom C/C++ (v10.6) for C/C++ source files
-- Borland Turbo Assembler (TASM v4.0) for assembly files
+### Required Game Files
 
-To use the compiled binaries, you must own the game. The C&C Ultimate Collection is available for purchase on [EA App](https://www.ea.com/en-gb/games/command-and-conquer/command-and-conquer-the-ultimate-collection/buy/pc) or [Steam](https://store.steampowered.com/bundle/39394/Command__Conquer_The_Ultimate_Collection/).
+You'll need the following files from an original Red Alert installation:
+- `REDALERT.MIX`
+- `CONQUER.MIX`
+- `LOCAL.MIX`
+- `SCORES.MIX`
+- `MAIN.MIX`
 
+## Building from Source
+
+See [docs/BUILD.md](docs/BUILD.md) for detailed build instructions.
+
+### Quick Build
+
+```bash
+# Clone the repository
+git clone https://github.com/your-org/redalert-macos.git
+cd redalert-macos
+
+# Install dependencies
+brew install cmake
+
+# Build
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+
+# Run
+open build/RedAlert.app
+```
+
+### Build Requirements
+
+- Xcode Command Line Tools
+- CMake 3.20+
+- Rust toolchain (installed automatically via Corrosion)
+
+## Project Structure
+
+```
+├── CODE/           # Original C++ game source
+├── WIN32LIB/       # Original Westwood library
+├── platform/       # Modern Rust platform layer
+│   └── src/
+│       ├── graphics/   # SDL2 rendering
+│       ├── audio/      # Audio playback
+│       ├── input/      # Keyboard/mouse input
+│       ├── network/    # enet networking
+│       └── ...
+├── include/        # Generated C headers
+├── scripts/        # Build and utility scripts
+└── docs/           # Documentation
+```
+
+## Documentation
+
+- [Build Instructions](docs/BUILD.md)
+- [Architecture Overview](docs/ARCHITECTURE.md)
+- [Platform API Reference](docs/PLATFORM-API.md)
+
+## Controls
+
+| Key | Action |
+|-----|--------|
+| Arrow Keys | Scroll map |
+| Mouse | Select units, issue commands |
+| Ctrl+# | Assign control group |
+| # | Select control group |
+| S | Stop selected units |
+| G | Guard mode |
+| Esc | Cancel/Menu |
+
+## Known Limitations
+
+- Multiplayer requires all players to use this port
+- Some original music formats may not play
+- Map editor not yet ported
 
 ## Contributing
 
-This repository will not be accepting contributions (pull requests, issues, etc). If you wish to create changes to the source code and encourage collaboration, please create a fork of the repository under your GitHub user/organization space.
+This is a preservation project. Bug fixes and compatibility improvements are welcome.
 
-
-## Support
-
-This repository is for preservation purposes only and is archived without support. 
-
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
 
 ## License
 
-This repository and its contents are licensed under the GPL v3 license, with additional terms applied. Please see [LICENSE.md](LICENSE.md) for details.
+The source code is released under the GPL-3.0 license. See [LICENSE.md](LICENSE.md) for details.
+
+Original game content and assets remain property of Electronic Arts.
+
+## Acknowledgments
+
+- **Westwood Studios**: Original game development
+- **Electronic Arts**: Open-source release of the code
+- The OpenRA and CnCNet communities for keeping C&C alive
+
+## History
+
+Red Alert was released in 1996 and became one of the most beloved RTS games ever made. In 2020, EA released the source code under GPL-3.0 to support the Steam Workshop release of the Command & Conquer Remastered Collection.
+
+This port adapts the original DOS/Windows code to run on modern macOS, replacing obsolete APIs (DirectDraw, Winsock, IPX) with cross-platform alternatives.

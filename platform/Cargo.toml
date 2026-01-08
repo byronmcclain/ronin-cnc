@@ -15,6 +15,7 @@ thiserror = "1.0"
 log = "0.4"
 sdl2 = { version = "0.36", features = ["bundled", "static-link"] }
 rodio = { version = "0.19", default-features = false, features = ["symphonia-all"] }
+enet = "0.3"
 
 [features]
 cbindgen-run = []
