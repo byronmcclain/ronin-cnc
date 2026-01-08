@@ -24,6 +24,16 @@
 #define PLATFORM_VERSION 1
 
 /**
+ * Frame data is XOR'd with reference frame
+ */
+#define XOR_DELTA 1
+
+/**
+ * Frame data is LCW compressed
+ */
+#define LCW_COMPRESSED 2
+
+/**
  * Default shadow intensity (50% darkness)
  */
 #define DEFAULT_SHADOW_INTENSITY 0.5
@@ -160,6 +170,16 @@ typedef struct PlatformFile PlatformFile;
 typedef struct PlatformHost PlatformHost;
 
 /**
+ * Opaque handle to a loaded shape file
+ */
+typedef struct PlatformShape PlatformShape;
+
+/**
+ * Opaque handle to a loaded template file
+ */
+typedef struct PlatformTemplate PlatformTemplate;
+
+/**
  * Display mode configuration
  */
 typedef struct DisplayMode {
@@ -169,7 +189,7 @@ typedef struct DisplayMode {
 } DisplayMode;
 
 /**
- * RGB palette entry (matches game format)
+ * RGB palette entry
  */
 typedef struct PaletteEntry {
   uint8_t r;
@@ -1481,6 +1501,28 @@ uint32_t Platform_CRC32_Finalize(uint32_t crc_val);
 uint32_t Platform_CRC32_Init(void);
 
 /**
+ * Calculate Westwood CRC (rotate-and-add hash) for MIX file lookups.
+ *
+ * This is NOT a standard CRC - it's Westwood's custom filename hash algorithm.
+ * The result is used to look up files in MIX archives via binary search.
+ *
+ * # Safety
+ * - `data` must point to valid memory of at least `size` bytes
+ */
+uint32_t Platform_Westwood_CRC(const uint8_t *data, int32_t size);
+
+/**
+ * Calculate Westwood CRC for a filename string.
+ *
+ * The filename is automatically converted to uppercase before hashing,
+ * as MIX files use case-insensitive lookups.
+ *
+ * # Safety
+ * - `filename` must be a valid null-terminated C string
+ */
+uint32_t Platform_Westwood_CRC_Filename(const char *filename);
+
+/**
  * Seed the global random number generator
  */
 void Platform_Random_Seed(uint32_t seed);
@@ -1504,6 +1546,249 @@ int32_t Platform_Random_Range(int32_t min, int32_t max);
  * Get random number in range [0, max)
  */
 uint32_t Platform_Random_Max(uint32_t max);
+
+/**
+ * Initialize the asset system
+ *
+ * This is optional - the MIX manager is initialized lazily.
+ */
+int32_t Platform_Assets_Init(void);
+
+/**
+ * Register a MIX file with the asset system
+ *
+ * # Safety
+ * - `path` must be a valid null-terminated C string
+ *
+ * # Returns
+ * - 0 on success
+ * - -1 on error (file not found, invalid format, etc.)
+ */
+int32_t Platform_Mix_Register(const char *path);
+
+/**
+ * Register and cache a MIX file
+ *
+ * # Safety
+ * - `path` must be a valid null-terminated C string
+ *
+ * # Returns
+ * - 0 on success
+ * - -1 on error
+ */
+int32_t Platform_Mix_RegisterAndCache(const char *path);
+
+/**
+ * Unregister a MIX file
+ *
+ * # Safety
+ * - `path` must be a valid null-terminated C string
+ *
+ * # Returns
+ * - 1 if found and removed
+ * - 0 if not found
+ * - -1 on error
+ */
+int32_t Platform_Mix_Unregister(const char *path);
+
+/**
+ * Check if a file exists in any registered MIX
+ *
+ * # Safety
+ * - `filename` must be a valid null-terminated C string
+ *
+ * # Returns
+ * - 1 if file exists
+ * - 0 if not found
+ */
+int32_t Platform_Mix_Exists(const char *filename);
+
+/**
+ * Read file data from MIX archives
+ *
+ * The data is copied to the provided buffer.
+ *
+ * # Safety
+ * - `filename` must be a valid null-terminated C string
+ * - `buffer` must point to at least `buffer_size` bytes
+ *
+ * # Returns
+ * - Number of bytes read on success
+ * - 0 if file not found
+ * - -1 on error
+ */
+int32_t Platform_Mix_Read(const char *filename, uint8_t *buffer, int32_t buffer_size);
+
+/**
+ * Get the size of a file in MIX archives
+ *
+ * # Safety
+ * - `filename` must be a valid null-terminated C string
+ *
+ * # Returns
+ * - File size in bytes on success
+ * - 0 if not found
+ * - -1 on error
+ */
+int32_t Platform_Mix_GetSize(const char *filename);
+
+/**
+ * Get number of registered MIX files
+ */
+int32_t Platform_Mix_GetCount(void);
+
+/**
+ * Load a palette from raw PAL data
+ *
+ * PAL data uses 6-bit color values (0-63), which are shifted to 8-bit (0-252).
+ *
+ * # Safety
+ * - `pal_data` must point to exactly 768 bytes
+ * - `output` must point to 768 bytes (256 × 3 RGB)
+ *
+ * # Returns
+ * - 0 on success
+ * - -1 on error
+ */
+int32_t Platform_Palette_LoadPAL(const uint8_t *pal_data, uint8_t *output);
+
+/**
+ * Load a palette from a file in MIX archives
+ *
+ * # Safety
+ * - `filename` must be a valid null-terminated C string
+ * - `output` must point to 768 bytes (256 × 3 RGB)
+ *
+ * # Returns
+ * - 0 on success
+ * - -1 on error
+ */
+int32_t Platform_Palette_Load(const char *filename, uint8_t *output);
+
+/**
+ * Load a shape file from MIX archives
+ *
+ * # Safety
+ * - `filename` must be a valid null-terminated C string
+ *
+ * # Returns
+ * - Pointer to loaded shape on success
+ * - null on error
+ */
+struct PlatformShape *Platform_Shape_Load(const char *filename);
+
+/**
+ * Load a shape file from raw data
+ *
+ * # Safety
+ * - `data` must point to at least `size` bytes
+ *
+ * # Returns
+ * - Pointer to loaded shape on success
+ * - null on error
+ */
+struct PlatformShape *Platform_Shape_LoadFromMemory(const uint8_t *data, int32_t size);
+
+/**
+ * Free a loaded shape file
+ *
+ * # Safety
+ * - `shape` must be a valid pointer from Platform_Shape_Load/LoadFromMemory
+ */
+void Platform_Shape_Free(struct PlatformShape *shape);
+
+/**
+ * Get shape dimensions
+ *
+ * # Safety
+ * - `shape` must be a valid shape pointer
+ */
+void Platform_Shape_GetSize(const struct PlatformShape *shape, int32_t *width, int32_t *height);
+
+/**
+ * Get number of frames in a shape
+ *
+ * # Safety
+ * - `shape` must be a valid shape pointer
+ */
+int32_t Platform_Shape_GetFrameCount(const struct PlatformShape *shape);
+
+/**
+ * Get frame pixel data
+ *
+ * Copies frame pixels to the provided buffer.
+ *
+ * # Safety
+ * - `shape` must be a valid shape pointer
+ * - `buffer` must point to at least width * height bytes
+ *
+ * # Returns
+ * - Number of bytes copied on success
+ * - 0 if frame index is invalid
+ * - -1 on error
+ */
+int32_t Platform_Shape_GetFrame(const struct PlatformShape *shape,
+                                int32_t frame_index,
+                                uint8_t *buffer,
+                                int32_t buffer_size);
+
+/**
+ * Load a template file from raw data
+ *
+ * # Safety
+ * - `data` must point to at least `size` bytes
+ *
+ * # Returns
+ * - Pointer to loaded template on success
+ * - null on error
+ */
+struct PlatformTemplate *Platform_Template_LoadFromMemory(const uint8_t *data,
+                                                          int32_t size,
+                                                          int32_t tile_width,
+                                                          int32_t tile_height);
+
+/**
+ * Free a loaded template file
+ *
+ * # Safety
+ * - `template` must be a valid pointer from Platform_Template_LoadFromMemory
+ */
+void Platform_Template_Free(struct PlatformTemplate *template_);
+
+/**
+ * Get number of tiles in a template
+ *
+ * # Safety
+ * - `template` must be a valid template pointer
+ */
+int32_t Platform_Template_GetTileCount(const struct PlatformTemplate *template_);
+
+/**
+ * Get tile dimensions
+ *
+ * # Safety
+ * - `template` must be a valid template pointer
+ */
+void Platform_Template_GetTileSize(const struct PlatformTemplate *template_,
+                                   int32_t *width,
+                                   int32_t *height);
+
+/**
+ * Get tile pixel data
+ *
+ * # Safety
+ * - `template` must be a valid template pointer
+ * - `buffer` must point to at least tile_width * tile_height bytes
+ *
+ * # Returns
+ * - Number of bytes copied on success
+ * - 0 if tile index is invalid
+ * - -1 on error
+ */
+int32_t Platform_Template_GetTile(const struct PlatformTemplate *template_,
+                                  int32_t tile_index,
+                                  uint8_t *buffer,
+                                  int32_t buffer_size);
 
 /**
  * Check if running on a Retina/HiDPI display
