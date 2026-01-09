@@ -369,6 +369,167 @@ if(APPLE)
     )
 endif()
 
+# =============================================================================
+# Game Code Library (Phase 14)
+# =============================================================================
+# Ported Red Alert game code
+
+# Game source files
+set(GAME_SOURCES
+    # Core types
+    src/game/core/coord.cpp
+    src/game/core/house.cpp
+
+    # Display system
+    src/game/display/gscreen.cpp
+    src/game/display/gadget.cpp
+    src/game/display/map.cpp
+    src/game/display/display.cpp
+
+    # Map cells
+    src/game/map/cell.cpp
+
+    # Object system
+    src/game/object/object.cpp
+
+    # Type classes
+    src/game/types/types.cpp
+
+    # Main loop
+    src/game/game_loop.cpp
+    src/game/init.cpp
+)
+
+# Game header files (for IDE)
+set(GAME_HEADERS
+    include/game/game.h
+    include/game/coord.h
+    include/game/facing.h
+    include/game/house.h
+    include/game/weapon.h
+    include/game/gscreen.h
+    include/game/gadget.h
+    include/game/map.h
+    include/game/cell.h
+    include/game/display.h
+    include/game/abstract.h
+    include/game/object.h
+    include/game/techno.h
+    include/game/mission.h
+    include/game/core/rtti.h
+    include/game/types/abstracttype.h
+    include/game/types/objecttype.h
+    include/game/types/technotype.h
+    include/game/types/unittype.h
+    include/game/types/buildingtype.h
+)
+
+# Create game library
+add_library(game_core STATIC
+    ${GAME_SOURCES}
+    ${GAME_HEADERS}
+)
+
+target_include_directories(game_core PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/compat
+)
+
+target_link_libraries(game_core PUBLIC
+    redalert_platform
+)
+
+target_compile_features(game_core PUBLIC cxx_std_17)
+
+add_dependencies(game_core generate_headers)
+
+# Suppress warnings for legacy code patterns
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    target_compile_options(game_core PRIVATE
+        -Wno-unused-parameter
+        -Wno-unused-variable
+    )
+endif()
+
+if(APPLE)
+    target_link_libraries(game_core PUBLIC
+        "-framework CoreFoundation"
+        "-framework Security"
+    )
+endif()
+
+# =============================================================================
+# RedAlertGame Executable
+# =============================================================================
+
+add_executable(RedAlertGame
+    src/main_game.cpp
+)
+
+target_include_directories(RedAlertGame PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(RedAlertGame PRIVATE
+    game_core
+    redalert_platform
+)
+
+target_compile_features(RedAlertGame PRIVATE cxx_std_17)
+
+add_dependencies(RedAlertGame generate_headers)
+
+if(APPLE)
+    target_link_libraries(RedAlertGame PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+# =============================================================================
+# Game Structure Test
+# =============================================================================
+
+add_executable(TestGameStructure src/test_game_structure.cpp)
+
+target_link_libraries(TestGameStructure PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestGameStructure generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestGameStructure PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
 # Enable testing
 enable_testing()
 add_test(NAME PlatformTests COMMAND TestPlatform)
@@ -377,3 +538,4 @@ add_test(NAME AssetTests COMMAND TestAssets)
 add_test(NAME MixDecryptTests COMMAND TestMixDecrypt)
 add_test(NAME CompatTests COMMAND TestCompat)
 add_test(NAME OriginalCompileTests COMMAND TestOriginalCompile)
+add_test(NAME GameStructureTests COMMAND TestGameStructure)

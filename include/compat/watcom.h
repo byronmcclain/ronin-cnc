@@ -151,9 +151,9 @@
 #endif
 
 // __segment type (segment selector)
-#ifndef __segment
-#define __segment unsigned short
-#endif
+// NOTE: Do NOT define __segment - it conflicts with libc++ internal __segment()
+// functions. Original code using __segment is extremely rare.
+// If needed, use 'unsigned short' directly.
 
 // __segname (get segment by name)
 #ifndef __segname
