@@ -1540,7 +1540,8 @@ When this task is complete:
 8. All unit tests passing
 9. Interactive demo showing responsive scrolling
 
----
+When verification passes, output:
+<promise>TASK_15G_COMPLETE</promise>
 
 ## Escape Hatch
 
@@ -1551,13 +1552,8 @@ If you get stuck:
 4. Skip edge scroll acceleration (constant speed is fine)
 5. Test each conversion function in isolation
 
----
+If blocked after max iterations, document blockers and output:
+<promise>TASK_15G_BLOCKED</promise>
 
 ## Max Iterations
-
-This task should complete in **4-5 iterations**:
-1. Create viewport.h/cpp with basic scrolling
-2. Create scroll_manager.h/cpp with animations
-3. Create scroll_input.h/cpp with input handling
-4. Create test program and verify
-5. Polish and fix any issues
+5

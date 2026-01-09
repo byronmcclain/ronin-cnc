@@ -1563,14 +1563,13 @@ add_test(NAME TestPaletteManager COMMAND TestPaletteManager)
 
 ## Completion Promise
 When verification passes, output:
-```
 <promise>TASK_15D_COMPLETE</promise>
-```
 
 ## Escape Hatch
 If stuck after 15 iterations:
 - Document what's blocking in `ralph-tasks/blocked/15d.md`
-- Output: `<promise>TASK_15D_BLOCKED</promise>`
+- Output:
+<promise>TASK_15D_BLOCKED</promise>
 
 ## Max Iterations
 15

@@ -1443,7 +1443,8 @@ When this task is complete:
 8. Documentation of integration points
 9. Ready for Phase 16 (Audio) or further game development
 
----
+When verification passes, output:
+<promise>TASK_15H_COMPLETE</promise>
 
 ## Phase 15 Summary
 
@@ -1462,8 +1463,6 @@ Upon completion of Task 15h, Phase 15 delivers:
 
 **Total: ~7,300 lines of graphics code**
 
----
-
 ## Escape Hatch
 
 If you get stuck:
@@ -1473,14 +1472,8 @@ If you get stuck:
 4. Skip stress test if performance is blocking
 5. Focus on getting basic rendering working before polish
 
----
+If blocked after max iterations, document blockers and output:
+<promise>TASK_15H_BLOCKED</promise>
 
 ## Max Iterations
-
-This task should complete in **5-6 iterations**:
-1. Create graphics_system.h/cpp
-2. Create basic integration test
-3. Add stress test and performance metrics
-4. Create interactive demo
-5. Run full verification and fix issues
-6. Polish and documentation
+6

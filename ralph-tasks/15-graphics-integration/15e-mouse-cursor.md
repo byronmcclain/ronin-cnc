@@ -1349,14 +1349,13 @@ add_test(NAME TestMouseCursor COMMAND TestMouseCursor)
 
 ## Completion Promise
 When verification passes, output:
-```
 <promise>TASK_15E_COMPLETE</promise>
-```
 
 ## Escape Hatch
 If stuck after 15 iterations:
 - Document what's blocking in `ralph-tasks/blocked/15e.md`
-- Output: `<promise>TASK_15E_BLOCKED</promise>`
+- Output:
+<promise>TASK_15E_BLOCKED</promise>
 
 ## Max Iterations
 15

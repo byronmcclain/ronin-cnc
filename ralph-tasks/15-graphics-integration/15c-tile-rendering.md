@@ -1516,14 +1516,13 @@ add_test(NAME TestTileRendering COMMAND TestTileRendering)
 
 ## Completion Promise
 When verification passes, output:
-```
 <promise>TASK_15C_COMPLETE</promise>
-```
 
 ## Escape Hatch
 If stuck after 15 iterations:
 - Document what's blocking in `ralph-tasks/blocked/15c.md`
-- Output: `<promise>TASK_15C_BLOCKED</promise>`
+- Output:
+<promise>TASK_15C_BLOCKED</promise>
 
 ## Max Iterations
 15

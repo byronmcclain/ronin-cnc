@@ -2127,7 +2127,8 @@ When this task is complete:
 8. All unit tests passing
 9. Interactive test showing complete game display
 
----
+When verification passes, output:
+<promise>TASK_15F_COMPLETE</promise>
 
 ## Escape Hatch
 
@@ -2138,16 +2139,8 @@ If you get stuck:
 4. Use placeholder rectangles for sidebar/radar before full implementation
 5. Ask for help with specific rendering issues
 
----
+If blocked after max iterations, document blockers and output:
+<promise>TASK_15F_BLOCKED</promise>
 
 ## Max Iterations
-
-This task should complete in **6-8 iterations**:
-1. Create render_layer.h with enums and interfaces
-2. Create render_pipeline.h with class definition
-3. Implement render_pipeline.cpp core rendering
-4. Implement sidebar_render.h/cpp
-5. Implement radar_render.h/cpp
-6. Create test program and verify
-7. Fix any issues found in testing
-8. Polish and final verification
+8

@@ -1641,15 +1641,14 @@ add_test(NAME TestGraphicsBuffer COMMAND TestGraphicsBuffer)
 
 ## Completion Promise
 When verification passes, output:
-```
 <promise>TASK_15A_COMPLETE</promise>
-```
 
 ## Escape Hatch
 If stuck after 15 iterations:
 - Document what's blocking in `ralph-tasks/blocked/15a.md`
 - List attempted approaches
-- Output: `<promise>TASK_15A_BLOCKED</promise>`
+- Output:
+<promise>TASK_15A_BLOCKED</promise>
 
 ## Max Iterations
 15

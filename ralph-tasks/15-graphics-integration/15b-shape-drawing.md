@@ -2117,14 +2117,13 @@ add_test(NAME TestShapeDrawing COMMAND TestShapeDrawing)
 
 ## Completion Promise
 When verification passes, output:
-```
 <promise>TASK_15B_COMPLETE</promise>
-```
 
 ## Escape Hatch
 If stuck after 15 iterations:
 - Document what's blocking in `ralph-tasks/blocked/15b.md`
-- Output: `<promise>TASK_15B_BLOCKED</promise>`
+- Output:
+<promise>TASK_15B_BLOCKED</promise>
 
 ## Max Iterations
 15
