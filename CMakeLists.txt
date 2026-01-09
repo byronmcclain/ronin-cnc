@@ -261,9 +261,119 @@ if(APPLE)
     )
 endif()
 
+# =============================================================================
+# Compatibility Layer Library
+# =============================================================================
+# Provides Windows/DOS API compatibility for original Red Alert code
+
+# Compatibility library source
+add_library(compat STATIC
+    src/compat/compat.cpp
+)
+
+# Include directories
+target_include_directories(compat PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/compat
+)
+
+# Link against platform layer
+target_link_libraries(compat PUBLIC
+    redalert_platform
+)
+
+# Compile definitions
+target_compile_definitions(compat PUBLIC
+    # These prevent real Windows headers from being included
+    _WINDOWS_
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+)
+
+# C++ standard
+target_compile_features(compat PUBLIC cxx_std_17)
+
+# Ensure headers are generated before compiling
+add_dependencies(compat generate_headers)
+
+# Suppress warnings for legacy compatibility code
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    target_compile_options(compat PRIVATE
+        -Wno-unused-parameter
+        -Wno-unused-variable
+        -Wno-sign-compare
+    )
+endif()
+
+# =============================================================================
+# Compatibility Layer Test
+# =============================================================================
+
+add_executable(TestCompat src/test_compat.cpp)
+
+target_link_libraries(TestCompat PRIVATE
+    compat
+    redalert_platform
+)
+
+add_dependencies(TestCompat generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestCompat PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+# =============================================================================
+# Original Code Compilation Test
+# =============================================================================
+
+add_executable(TestOriginalCompile src/test_original_compile.cpp)
+
+target_link_libraries(TestOriginalCompile PRIVATE
+    compat
+    redalert_platform
+)
+
+add_dependencies(TestOriginalCompile generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestOriginalCompile PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
 # Enable testing
 enable_testing()
 add_test(NAME PlatformTests COMMAND TestPlatform)
 add_test(NAME PlatformQuickTests COMMAND TestPlatform --quick)
 add_test(NAME AssetTests COMMAND TestAssets)
 add_test(NAME MixDecryptTests COMMAND TestMixDecrypt)
+add_test(NAME CompatTests COMMAND TestCompat)
+add_test(NAME OriginalCompileTests COMMAND TestOriginalCompile)
