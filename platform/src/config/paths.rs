@@ -107,20 +107,20 @@ pub fn get_cache_path() -> PathBuf {
 /// Get the game data directory
 ///
 /// Search order:
-/// 1. App bundle Resources/data/ (for packaged app)
-/// 2. ./data/ (for development)
-/// 3. ../data/ (for build directory)
+/// 1. App bundle Resources/gamedata/ (for packaged app)
+/// 2. ./gamedata/ (for development)
+/// 3. ../gamedata/ (for build directory)
 ///
-/// Returns the first path that exists, or ./data/ as default
+/// Returns the first path that exists, or ./gamedata/ as default
 pub fn get_data_path() -> PathBuf {
     // Check for bundled app Resources
     if let Ok(exe_path) = std::env::current_exe() {
         // App bundle: RedAlert.app/Contents/MacOS/RedAlert
-        // Resources:  RedAlert.app/Contents/Resources/data/
+        // Resources:  RedAlert.app/Contents/Resources/gamedata/
         let bundle_resources = exe_path
             .parent() // MacOS/
             .and_then(|p| p.parent()) // Contents/
-            .map(|p| p.join("Resources").join("data"));
+            .map(|p| p.join("Resources").join("gamedata"));
 
         if let Some(ref path) = bundle_resources {
             if path.is_dir() {
@@ -129,19 +129,19 @@ pub fn get_data_path() -> PathBuf {
         }
     }
 
-    // Check ./data/
-    let local_data = PathBuf::from("data");
+    // Check ./gamedata/
+    let local_data = PathBuf::from("gamedata");
     if local_data.is_dir() {
         return local_data;
     }
 
-    // Check ../data/ (common when running from build/)
-    let parent_data = PathBuf::from("..").join("data");
+    // Check ../gamedata/ (common when running from build/)
+    let parent_data = PathBuf::from("..").join("gamedata");
     if parent_data.is_dir() {
         return parent_data;
     }
 
-    // Default to ./data/ even if it doesn't exist yet
+    // Default to ./gamedata/ even if it doesn't exist yet
     local_data
 }
 
@@ -301,9 +301,9 @@ pub unsafe extern "C" fn Platform_GetCachePath(
 /// - -1 on error
 ///
 /// # Search Order
-/// 1. App bundle Resources/data/
-/// 2. ./data/
-/// 3. ../data/
+/// 1. App bundle Resources/gamedata/
+/// 2. ./gamedata/
+/// 3. ../gamedata/
 #[no_mangle]
 pub unsafe extern "C" fn Platform_GetDataPath(
     buffer: *mut c_char,

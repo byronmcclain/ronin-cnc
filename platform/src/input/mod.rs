@@ -314,18 +314,9 @@ pub fn sdl_to_keycode(key: Keycode) -> Option<KeyCode> {
         Keycode::NumLockClear => Some(KeyCode::NumLock),
         Keycode::ScrollLock => Some(KeyCode::ScrollLock),
         _ => {
-            // Handle alphanumeric keys
-            let code = key as i32;
-            if code >= 'a' as i32 && code <= 'z' as i32 {
-                // Convert to uppercase VK code (0x41-0x5A)
-                let vk = (code - 'a' as i32 + 0x41) as i32;
-                return Some(unsafe { std::mem::transmute(vk) });
-            }
-            if code >= '0' as i32 && code <= '9' as i32 {
-                // VK_0 to VK_9 (0x30-0x39)
-                let vk = (code - '0' as i32 + 0x30) as i32;
-                return Some(unsafe { std::mem::transmute(vk) });
-            }
+            // For alphanumeric keys, we don't have dedicated enum variants
+            // Just return None for now - game uses arrow keys/function keys/ESC
+            // which are all handled above
             None
         }
     }

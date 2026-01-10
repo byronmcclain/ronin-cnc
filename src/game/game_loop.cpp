@@ -67,6 +67,41 @@ bool GameClass::Initialize() {
         return false;
     }
 
+    // Register MIX files from gamedata directory
+    Platform_LogInfo("Registering MIX files...");
+
+    // Get the data path (should find gamedata directory)
+    char data_path[512];
+    Platform_GetDataPath(data_path, sizeof(data_path));
+
+    char mix_path[512];
+    int mix_count = 0;
+
+    // Register REDALERT.MIX - contains palettes and core data
+    snprintf(mix_path, sizeof(mix_path), "%s/REDALERT.MIX", data_path);
+    if (Platform_Mix_Register(mix_path) > 0) {
+        Platform_LogInfo("  Registered REDALERT.MIX");
+        mix_count++;
+    }
+
+    // Register MAIN.MIX - contains main game assets
+    snprintf(mix_path, sizeof(mix_path), "%s/MAIN.MIX", data_path);
+    if (Platform_Mix_Register(mix_path) > 0) {
+        Platform_LogInfo("  Registered MAIN.MIX");
+        mix_count++;
+    }
+
+    // Register theater-specific MIX files
+    snprintf(mix_path, sizeof(mix_path), "%s/interior.mix", data_path);
+    Platform_Mix_Register(mix_path);
+
+    snprintf(mix_path, sizeof(mix_path), "%s/winter.mix", data_path);
+    Platform_Mix_Register(mix_path);
+
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Registered %d MIX files", mix_count);
+    Platform_LogInfo(msg);
+
     // Create display
     display_ = new DisplayClass();
     if (display_ == nullptr) {
@@ -138,13 +173,17 @@ int GameClass::Run() {
         // Start frame timing
         Platform_Frame_Begin();
 
-        // Check for system quit
+        // Update input state BEFORE polling events
+        // This saves current key state as previous, so we can detect "just pressed"
+        Platform_Input_Update();
+
+        // Check for system quit (this also processes all SDL events)
         if (Platform_PollEvents()) {
             mode_ = GAME_MODE_QUIT;
             break;
         }
 
-        // Process input
+        // Process input (game-specific handling)
         Process_Input();
 
         // Update logic (if time for tick)
@@ -184,10 +223,8 @@ uint32_t GameClass::Get_Tick_Interval() const {
 // =============================================================================
 
 void GameClass::Process_Input() {
-    // Update platform input state
-    Platform_Input_Update();
-
     // Handle mode-specific input
+    // Note: Platform_Input_Update() is called in the main loop before Platform_PollEvents()
     switch (mode_) {
         case GAME_MODE_MENU:
             Process_Menu();
@@ -216,6 +253,39 @@ void GameClass::Process_Input() {
 void GameClass::Process_Menu() {
     // Simplified menu - just start playing on ENTER
     if (Platform_Key_WasPressed(KEY_CODE_RETURN)) {
+        Platform_LogInfo("Loading theater palette...");
+
+        // Load the theater palette from MIX files
+        uint8_t palette_data[768];
+        int result = Platform_Palette_Load("TEMPERAT.PAL", palette_data);
+
+        if (result == 0) {
+            Platform_LogInfo("Loaded TEMPERAT.PAL successfully");
+            // Apply the palette
+            PaletteEntry entries[256];
+            for (int i = 0; i < 256; i++) {
+                // PAL files are 6-bit (0-63), Platform_Palette_Load converts to 8-bit
+                entries[i].r = palette_data[i * 3 + 0];
+                entries[i].g = palette_data[i * 3 + 1];
+                entries[i].b = palette_data[i * 3 + 2];
+            }
+            Platform_Graphics_SetPalette(entries, 0, 256);
+        } else {
+            Platform_LogError("Failed to load TEMPERAT.PAL, using fallback palette");
+            // Set some fallback colors so we can see something
+            PaletteEntry entries[256];
+            for (int i = 0; i < 256; i++) {
+                entries[i].r = (uint8_t)i;
+                entries[i].g = (uint8_t)i;
+                entries[i].b = (uint8_t)i;
+            }
+            // Add some recognizable colors for terrain types
+            entries[141].r = 50; entries[141].g = 120; entries[141].b = 50;  // Green for clear
+            entries[154].r = 30; entries[154].g = 60;  entries[154].b = 150; // Blue for water
+            entries[176].r = 128; entries[176].g = 128; entries[176].b = 128; // Grey for roads
+            Platform_Graphics_SetPalette(entries, 0, 256);
+        }
+
         // Initialize a test scenario
         if (display_) {
             display_->Init(THEATER_TEMPERATE);
@@ -335,11 +405,19 @@ void GameClass::Render_Frame() {
     // Render based on mode
     switch (mode_) {
         case GAME_MODE_MENU:
-            // Draw simple menu placeholder
+            // Draw simple menu placeholder with visible colors
+            // Using high palette indices for grayscale visibility
             display_->Lock();
             display_->Clear(0);
-            display_->Draw_Rect(200, 180, 240, 40, 8);
-            display_->Draw_Rect(202, 182, 236, 36, 7);
+            // Outer rectangle (bright white)
+            display_->Draw_Rect(200, 180, 240, 40, 255);
+            // Inner rectangle (gray)
+            display_->Draw_Rect(202, 182, 236, 36, 128);
+            // Draw "PRESS ENTER" indicator with white pixels
+            // Simple horizontal line as visual cue
+            for (int x = 280; x < 360; x++) {
+                display_->Put_Pixel(x, 200, 255);
+            }
             display_->Unlock();
             display_->Flip();
             break;
