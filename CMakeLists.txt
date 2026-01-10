@@ -1486,3 +1486,418 @@ if(APPLE)
 endif()
 
 add_test(NAME AudioEventsTests COMMAND TestAudioEvents --quick)
+
+# =============================================================================
+# Test Framework Foundation (Phase 18a)
+# =============================================================================
+
+set(TEST_FRAMEWORK_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/test/test_framework.cpp
+    ${CMAKE_SOURCE_DIR}/src/test/test_fixtures.cpp
+    ${CMAKE_SOURCE_DIR}/src/test/test_reporter.cpp
+)
+
+set(TEST_FRAMEWORK_HEADERS
+    ${CMAKE_SOURCE_DIR}/include/test/test_framework.h
+    ${CMAKE_SOURCE_DIR}/include/test/test_fixtures.h
+    ${CMAKE_SOURCE_DIR}/include/test/test_reporter.h
+)
+
+add_library(test_framework STATIC ${TEST_FRAMEWORK_SOURCES})
+
+target_include_directories(test_framework PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+)
+
+target_link_libraries(test_framework PUBLIC redalert_platform)
+
+add_dependencies(test_framework generate_headers)
+
+# Framework self-test
+add_executable(TestFrameworkSelfTest
+    ${CMAKE_SOURCE_DIR}/src/test_framework_self_test.cpp
+)
+
+target_include_directories(TestFrameworkSelfTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(TestFrameworkSelfTest PRIVATE
+    test_framework
+    redalert_platform
+)
+
+add_dependencies(TestFrameworkSelfTest generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestFrameworkSelfTest PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME TestFrameworkSelfTest COMMAND TestFrameworkSelfTest)
+
+# =============================================================================
+# Unit Tests (Phase 18b)
+# =============================================================================
+
+# Collect all unit test sources
+set(UNIT_TEST_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/tests/unit/test_platform.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/unit/test_assets.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/unit/test_audio.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/unit/test_input.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/unit/test_graphics.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/unit/test_utils.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/unit_tests_main.cpp
+)
+
+add_executable(UnitTests ${UNIT_TEST_SOURCES})
+
+target_include_directories(UnitTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/audio
+)
+
+target_link_libraries(UnitTests PRIVATE
+    test_framework
+    game_core
+    redalert_platform
+)
+
+add_dependencies(UnitTests generate_headers)
+
+if(APPLE)
+    target_link_libraries(UnitTests PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+# Register with CTest
+add_test(NAME UnitTests COMMAND UnitTests)
+
+# Quick unit tests (subset for CI)
+add_test(NAME UnitTests_Quick COMMAND UnitTests --category Utils)
+
+# =============================================================================
+# Task 18c: Integration Tests
+# =============================================================================
+
+set(INTEGRATION_TEST_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/tests/integration/test_lifecycle.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/integration/test_asset_pipeline.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/integration/test_render_pipeline.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/integration/test_audio_pipeline.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/integration/test_game_loop.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/integration_tests_main.cpp
+)
+
+add_executable(IntegrationTests ${INTEGRATION_TEST_SOURCES})
+
+target_include_directories(IntegrationTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/audio
+)
+
+target_link_libraries(IntegrationTests PRIVATE
+    test_framework
+    game_core
+    redalert_platform
+)
+
+add_dependencies(IntegrationTests generate_headers)
+
+if(APPLE)
+    target_link_libraries(IntegrationTests PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+# Register integration tests with CTest
+add_test(NAME IntegrationTests COMMAND IntegrationTests)
+
+# Quick integration tests (lifecycle only)
+add_test(NAME IntegrationTests_Quick COMMAND IntegrationTests --category Lifecycle)
+
+# =============================================================================
+# Task 18d: Visual Tests
+# =============================================================================
+
+set(VISUAL_TEST_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/tests/visual/screenshot_utils.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/visual/test_palettes.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/visual/test_shapes.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/visual/test_resolution.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/visual/test_animation.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/visual_tests_main.cpp
+)
+
+add_executable(VisualTests ${VISUAL_TEST_SOURCES})
+
+target_include_directories(VisualTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/audio
+    ${CMAKE_SOURCE_DIR}/src/tests/visual
+)
+
+target_link_libraries(VisualTests PRIVATE
+    test_framework
+    game_core
+    redalert_platform
+)
+
+add_dependencies(VisualTests generate_headers)
+
+if(APPLE)
+    target_link_libraries(VisualTests PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+# Register visual tests with CTest
+add_test(NAME VisualTests COMMAND VisualTests)
+
+# Create reference directory
+file(MAKE_DIRECTORY ${CMAKE_SOURCE_DIR}/reference)
+
+# =============================================================================
+# Task 18e: Gameplay Tests
+# =============================================================================
+
+set(GAMEPLAY_TEST_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/tests/gameplay/test_movement.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/gameplay/test_combat.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/gameplay/test_building.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/gameplay/test_resources.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/gameplay/test_ai.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/gameplay/test_game_rules.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/gameplay_tests_main.cpp
+)
+
+add_executable(GameplayTests ${GAMEPLAY_TEST_SOURCES})
+
+target_include_directories(GameplayTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+)
+
+target_link_libraries(GameplayTests PRIVATE
+    test_framework
+)
+
+add_dependencies(GameplayTests generate_headers)
+
+# Register gameplay tests with CTest
+add_test(NAME GameplayTests COMMAND GameplayTests)
+
+# =============================================================================
+# Task 18f: Performance Tests
+# =============================================================================
+
+set(PERFORMANCE_TEST_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/tests/performance/test_framerate.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/performance/test_stress.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/performance/test_memory.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/performance/test_loading.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/performance_tests_main.cpp
+)
+
+add_executable(PerformanceTests ${PERFORMANCE_TEST_SOURCES})
+
+target_include_directories(PerformanceTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/src/tests
+    ${CMAKE_SOURCE_DIR}/src/tests/performance
+)
+
+target_link_libraries(PerformanceTests PRIVATE
+    test_framework
+    game_core
+    redalert_platform
+)
+
+add_dependencies(PerformanceTests generate_headers)
+
+if(APPLE)
+    target_link_libraries(PerformanceTests PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+# Register performance tests with CTest
+add_test(NAME PerformanceTests COMMAND PerformanceTests)
+
+# =============================================================================
+# Task 18g: Bug Tracking System
+# =============================================================================
+
+set(BUG_TRACKER_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/test/bug_tracker.cpp
+)
+
+# Add bug tracker to test framework
+target_sources(test_framework PRIVATE ${BUG_TRACKER_SOURCES})
+
+# Regression tests executable
+set(REGRESSION_TEST_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/tests/regression/regression_tests.cpp
+    ${CMAKE_SOURCE_DIR}/src/tests/regression_tests_main.cpp
+)
+
+add_executable(RegressionTests ${REGRESSION_TEST_SOURCES})
+
+target_include_directories(RegressionTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+)
+
+target_link_libraries(RegressionTests PRIVATE test_framework)
+
+add_dependencies(RegressionTests generate_headers)
+
+# Register regression tests with CTest
+add_test(NAME RegressionTests COMMAND RegressionTests)
+
+# =============================================================================
+# Task 18h: Performance Optimization
+# =============================================================================
+
+set(OPTIMIZATION_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/platform/profiler.cpp
+    ${CMAKE_SOURCE_DIR}/src/platform/memory_pool.cpp
+    ${CMAKE_SOURCE_DIR}/src/platform/memory_arena.cpp
+    ${CMAKE_SOURCE_DIR}/src/graphics/sprite_batch.cpp
+    ${CMAKE_SOURCE_DIR}/src/graphics/dirty_rect.cpp
+)
+
+# Add optimization sources to game_core library
+target_sources(game_core PRIVATE ${OPTIMIZATION_SOURCES})
+
+# Ensure include paths for new headers
+target_include_directories(game_core PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+)
+
+# =============================================================================
+# Task 18i: macOS App Bundle
+# =============================================================================
+
+if(APPLE)
+    # Include bundle configuration
+    include(${CMAKE_SOURCE_DIR}/cmake/MacOSBundle.cmake)
+
+    # Configure main game executable as bundle
+    configure_macos_bundle(RedAlertGame)
+
+    # Add signing and packaging targets
+    add_codesign_target(RedAlertGame)
+    add_dmg_target(RedAlertGame)
+
+    # Optional: Generate icon from source
+    # generate_app_icon()
+endif()
+
+# =============================================================================
+# Task 18j: Release Verification
+# =============================================================================
+
+# Release tests executable
+add_executable(ReleaseTests
+    ${CMAKE_SOURCE_DIR}/src/test/release_tests.cpp
+)
+
+target_include_directories(ReleaseTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(ReleaseTests PRIVATE test_framework)
+
+add_dependencies(ReleaseTests generate_headers)
+
+add_test(NAME ReleaseTests COMMAND ReleaseTests)
+
+# Custom target for full release verification
+add_custom_target(verify-release
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/release/verify_release.sh
+    DEPENDS RedAlertGame UnitTests IntegrationTests PerformanceTests ReleaseTests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT "Running full release verification"
+)
+
+# Custom target for running all tests
+add_custom_target(test-all
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/release/run_all_tests.sh
+    DEPENDS UnitTests IntegrationTests VisualTests PerformanceTests GameplayTests RegressionTests ReleaseTests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT "Running complete test suite"
+)
