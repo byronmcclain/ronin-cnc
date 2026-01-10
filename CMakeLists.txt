@@ -423,6 +423,15 @@ set(GAME_SOURCES
     src/game/input/command_system.cpp
     src/game/input/scroll_processor.cpp
     src/game/input/input_integration.cpp
+
+    # Audio System (Phase 17)
+    src/game/audio/aud_file.cpp
+    src/game/audio/sound_manager.cpp
+    src/game/audio/music_player.cpp
+    src/game/audio/voice_manager.cpp
+    src/game/audio/audio_system.cpp
+    src/game/audio/event_rate_limiter.cpp
+    src/game/audio/audio_events.cpp
 )
 
 # Game header files (for IDE)
@@ -471,6 +480,16 @@ set(GAME_HEADERS
     include/game/input/command_system.h
     include/game/input/scroll_processor.h
     include/game/input/input_integration.h
+    include/game/audio/aud_file.h
+    include/game/audio/sound_effect.h
+    include/game/audio/sound_manager.h
+    include/game/audio/music_track.h
+    include/game/audio/music_player.h
+    include/game/audio/voice_event.h
+    include/game/audio/voice_manager.h
+    include/game/audio/audio_system.h
+    include/game/audio/event_rate_limiter.h
+    include/game/audio/audio_events.h
 )
 
 # Create game library
@@ -1227,3 +1246,243 @@ if(APPLE)
 endif()
 
 add_test(NAME InputIntegrationTests COMMAND TestInputIntegration --quick)
+
+# =============================================================================
+# AUD File Loader Test (Phase 17a)
+# =============================================================================
+
+add_executable(TestAudLoader src/test_aud_loader.cpp)
+
+target_include_directories(TestAudLoader PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/audio
+)
+
+target_link_libraries(TestAudLoader PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestAudLoader generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestAudLoader PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME AudLoaderTests COMMAND TestAudLoader --quick)
+
+# =============================================================================
+# Sound Manager Test (Phase 17b)
+# =============================================================================
+
+add_executable(TestSoundManager src/test_sound_manager.cpp)
+
+target_include_directories(TestSoundManager PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/audio
+)
+
+target_link_libraries(TestSoundManager PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestSoundManager generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestSoundManager PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME SoundManagerTests COMMAND TestSoundManager --quick)
+
+# =============================================================================
+# Music Player Test (Phase 17c)
+# =============================================================================
+
+add_executable(TestMusicPlayer src/test_music_player.cpp)
+
+target_include_directories(TestMusicPlayer PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/audio
+)
+
+target_link_libraries(TestMusicPlayer PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestMusicPlayer generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestMusicPlayer PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME MusicPlayerTests COMMAND TestMusicPlayer --quick)
+
+# =============================================================================
+# Voice Manager Test (Phase 17d)
+# =============================================================================
+
+add_executable(TestVoiceManager src/test_voice_manager.cpp)
+
+target_include_directories(TestVoiceManager PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/audio
+)
+
+target_link_libraries(TestVoiceManager PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestVoiceManager generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestVoiceManager PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME VoiceManagerTests COMMAND TestVoiceManager --quick)
+
+# =============================================================================
+# Audio Integration Test (Phase 17e)
+# =============================================================================
+
+add_executable(TestAudioIntegration src/test_audio_integration.cpp)
+
+target_include_directories(TestAudioIntegration PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/audio
+)
+
+target_link_libraries(TestAudioIntegration PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestAudioIntegration generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestAudioIntegration PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME AudioIntegrationTests COMMAND TestAudioIntegration --quick)
+
+# =============================================================================
+# Audio Events Test (Phase 17f)
+# =============================================================================
+
+add_executable(TestAudioEvents src/test_audio_events.cpp)
+
+target_include_directories(TestAudioEvents PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/audio
+)
+
+target_link_libraries(TestAudioEvents PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestAudioEvents generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestAudioEvents PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME AudioEventsTests COMMAND TestAudioEvents --quick)
