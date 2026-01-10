@@ -398,6 +398,31 @@ set(GAME_SOURCES
     # Main loop
     src/game/game_loop.cpp
     src/game/init.cpp
+
+    # Graphics (Phase 15)
+    src/game/graphics/graphics_buffer.cpp
+    src/game/graphics/shape_renderer.cpp
+    src/game/graphics/remap_tables.cpp
+    src/game/graphics/tile_renderer.cpp
+    src/game/graphics/palette_manager.cpp
+    src/game/graphics/mouse_cursor.cpp
+    src/game/graphics/render_pipeline.cpp
+    src/game/graphics/sidebar_render.cpp
+    src/game/graphics/radar_render.cpp
+
+    # Viewport (Phase 15g)
+    src/game/viewport.cpp
+    src/game/scroll_manager.cpp
+
+    # Input System (Phase 16)
+    src/game/input/input_state.cpp
+    src/game/input/input_mapper.cpp
+    src/game/input/keyboard_handler.cpp
+    src/game/input/mouse_handler.cpp
+    src/game/input/selection_manager.cpp
+    src/game/input/command_system.cpp
+    src/game/input/scroll_processor.cpp
+    src/game/input/input_integration.cpp
 )
 
 # Game header files (for IDE)
@@ -422,6 +447,30 @@ set(GAME_HEADERS
     include/game/types/technotype.h
     include/game/types/unittype.h
     include/game/types/buildingtype.h
+    include/game/graphics/graphics_buffer.h
+    include/game/graphics/shape_renderer.h
+    include/game/graphics/remap_tables.h
+    include/game/graphics/tile_renderer.h
+    include/game/graphics/palette_manager.h
+    include/game/graphics/mouse_cursor.h
+    include/game/graphics/render_layer.h
+    include/game/graphics/render_pipeline.h
+    include/game/graphics/sidebar_render.h
+    include/game/graphics/radar_render.h
+    include/game/viewport.h
+    include/game/scroll_manager.h
+    include/game/input/input_defs.h
+    include/game/input/input_state.h
+    include/game/input/game_action.h
+    include/game/input/input_mapper.h
+    include/game/input/keyboard_handler.h
+    include/game/input/cursor_context.h
+    include/game/input/mouse_handler.h
+    include/game/input/selection_manager.h
+    include/game/input/command_types.h
+    include/game/input/command_system.h
+    include/game/input/scroll_processor.h
+    include/game/input/input_integration.h
 )
 
 # Create game library
@@ -530,6 +579,44 @@ if(APPLE)
     )
 endif()
 
+# =============================================================================
+# GraphicsBuffer Test (Phase 15a)
+# =============================================================================
+
+add_executable(TestGraphicsBuffer src/test_graphics_buffer.cpp)
+
+target_include_directories(TestGraphicsBuffer PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/graphics
+)
+
+target_link_libraries(TestGraphicsBuffer PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestGraphicsBuffer generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestGraphicsBuffer PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
 # Enable testing
 enable_testing()
 add_test(NAME PlatformTests COMMAND TestPlatform)
@@ -539,3 +626,604 @@ add_test(NAME MixDecryptTests COMMAND TestMixDecrypt)
 add_test(NAME CompatTests COMMAND TestCompat)
 add_test(NAME OriginalCompileTests COMMAND TestOriginalCompile)
 add_test(NAME GameStructureTests COMMAND TestGameStructure)
+add_test(NAME GraphicsBufferTests COMMAND TestGraphicsBuffer --quick)
+
+# =============================================================================
+# Shape Drawing Test (Phase 15b)
+# =============================================================================
+
+add_executable(TestShapeDrawing src/test_shape_drawing.cpp)
+
+target_include_directories(TestShapeDrawing PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/graphics
+)
+
+target_link_libraries(TestShapeDrawing PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestShapeDrawing generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestShapeDrawing PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME ShapeDrawingTests COMMAND TestShapeDrawing --quick)
+
+# =============================================================================
+# Tile Rendering Test (Phase 15c)
+# =============================================================================
+
+add_executable(TestTileRendering src/test_tile_rendering.cpp)
+
+target_include_directories(TestTileRendering PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/graphics
+)
+
+target_link_libraries(TestTileRendering PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestTileRendering generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestTileRendering PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME TileRenderingTests COMMAND TestTileRendering --quick)
+
+# =============================================================================
+# Palette Manager Test (Phase 15d)
+# =============================================================================
+
+add_executable(TestPaletteManager src/test_palette_manager.cpp)
+
+target_include_directories(TestPaletteManager PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/graphics
+)
+
+target_link_libraries(TestPaletteManager PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestPaletteManager generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestPaletteManager PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME PaletteManagerTests COMMAND TestPaletteManager --quick)
+
+# =============================================================================
+# Mouse Cursor Test (Phase 15e)
+# =============================================================================
+
+add_executable(TestMouseCursor src/test_mouse_cursor.cpp)
+
+target_include_directories(TestMouseCursor PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/graphics
+)
+
+target_link_libraries(TestMouseCursor PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestMouseCursor generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestMouseCursor PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME MouseCursorTests COMMAND TestMouseCursor --quick)
+
+# =============================================================================
+# Render Pipeline Test (Phase 15f)
+# =============================================================================
+
+add_executable(TestRenderPipeline src/test_render_pipeline.cpp)
+
+target_include_directories(TestRenderPipeline PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/graphics
+)
+
+target_link_libraries(TestRenderPipeline PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestRenderPipeline generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestRenderPipeline PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME RenderPipelineTests COMMAND TestRenderPipeline --quick)
+
+# =============================================================================
+# Viewport Test (Phase 15g)
+# =============================================================================
+
+add_executable(TestViewport src/test_viewport.cpp)
+
+target_include_directories(TestViewport PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/graphics
+)
+
+target_link_libraries(TestViewport PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestViewport generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestViewport PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME ViewportTests COMMAND TestViewport --quick)
+
+# =============================================================================
+# Graphics Integration Test (Phase 15h)
+# =============================================================================
+
+add_executable(TestGraphicsIntegration src/test_graphics_integration.cpp)
+
+target_include_directories(TestGraphicsIntegration PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/graphics
+)
+
+target_link_libraries(TestGraphicsIntegration PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestGraphicsIntegration generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestGraphicsIntegration PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME GraphicsIntegrationTests COMMAND TestGraphicsIntegration --quick)
+
+# =============================================================================
+# Input Foundation Test (Phase 16a)
+# =============================================================================
+
+add_executable(TestInputFoundation src/test_input_foundation.cpp)
+
+target_include_directories(TestInputFoundation PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/input
+)
+
+target_link_libraries(TestInputFoundation PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestInputFoundation generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestInputFoundation PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME InputFoundationTests COMMAND TestInputFoundation --quick)
+
+# =============================================================================
+# Input Mapper Test (Phase 16b)
+# =============================================================================
+
+add_executable(TestInputMapper src/test_input_mapper.cpp)
+
+target_include_directories(TestInputMapper PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/input
+)
+
+target_link_libraries(TestInputMapper PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestInputMapper generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestInputMapper PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME InputMapperTests COMMAND TestInputMapper --quick)
+
+# =============================================================================
+# Keyboard Handler Test (Phase 16c)
+# =============================================================================
+
+add_executable(TestKeyboardHandler src/test_keyboard_handler.cpp)
+
+target_include_directories(TestKeyboardHandler PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/input
+)
+
+target_link_libraries(TestKeyboardHandler PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestKeyboardHandler generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestKeyboardHandler PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME KeyboardHandlerTests COMMAND TestKeyboardHandler --quick)
+
+# =============================================================================
+# Mouse Handler Test (Phase 16d)
+# =============================================================================
+
+add_executable(TestMouseHandler src/test_mouse_handler.cpp)
+
+target_include_directories(TestMouseHandler PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/input
+)
+
+target_link_libraries(TestMouseHandler PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestMouseHandler generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestMouseHandler PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME MouseHandlerTests COMMAND TestMouseHandler --quick)
+
+# =============================================================================
+# Selection System Test (Phase 16e)
+# =============================================================================
+
+add_executable(TestSelection src/test_selection.cpp)
+
+target_include_directories(TestSelection PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/input
+)
+
+target_link_libraries(TestSelection PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestSelection generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestSelection PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME SelectionTests COMMAND TestSelection --quick)
+
+# =============================================================================
+# Command System Test (Phase 16f)
+# =============================================================================
+
+add_executable(TestCommandSystem src/test_command_system.cpp)
+
+target_include_directories(TestCommandSystem PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/input
+)
+
+target_link_libraries(TestCommandSystem PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestCommandSystem generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestCommandSystem PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME CommandSystemTests COMMAND TestCommandSystem --quick)
+
+# =============================================================================
+# Scroll Processor Test (Phase 16g)
+# =============================================================================
+
+add_executable(TestScrollProcessor src/test_scroll_processor.cpp)
+
+target_include_directories(TestScrollProcessor PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/input
+)
+
+target_link_libraries(TestScrollProcessor PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestScrollProcessor generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestScrollProcessor PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME ScrollProcessorTests COMMAND TestScrollProcessor --quick)
+
+# =============================================================================
+# Input Integration Test (Phase 16h)
+# =============================================================================
+
+add_executable(TestInputIntegration src/test_input_integration.cpp)
+
+target_include_directories(TestInputIntegration PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include/game
+    ${CMAKE_SOURCE_DIR}/include/game/input
+)
+
+target_link_libraries(TestInputIntegration PRIVATE
+    game_core
+    redalert_platform
+)
+
+add_dependencies(TestInputIntegration generate_headers)
+
+if(APPLE)
+    target_link_libraries(TestInputIntegration PRIVATE
+        "-framework CoreFoundation"
+        "-framework Security"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework Carbon"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework ForceFeedback"
+        "-framework CoreVideo"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework GameController"
+        "-framework CoreHaptics"
+        iconv
+    )
+endif()
+
+add_test(NAME InputIntegrationTests COMMAND TestInputIntegration --quick)
