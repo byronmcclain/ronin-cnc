@@ -12,6 +12,9 @@
 
 #include <cstdint>
 
+// Include coord.h for COORDINATE, CELL, and related macros (avoid redefinition)
+#include "game/coord.h"
+
 // =============================================================================
 // Screen Layout Constants
 // =============================================================================
@@ -23,9 +26,9 @@ static const int VP_SCREEN_HEIGHT = 400;
 static const int VP_SIDEBAR_WIDTH = 160;
 static const int VP_TAB_HEIGHT = 16;
 
-// Tactical area dimensions
-static const int TACTICAL_WIDTH = VP_SCREEN_WIDTH - VP_SIDEBAR_WIDTH;   // 480
-static const int TACTICAL_HEIGHT = VP_SCREEN_HEIGHT - VP_TAB_HEIGHT;    // 384
+// Tactical area dimensions (with VP_ prefix to avoid conflicts with display.h)
+static const int VP_TACTICAL_WIDTH = VP_SCREEN_WIDTH - VP_SIDEBAR_WIDTH;   // 480
+static const int VP_TACTICAL_HEIGHT = VP_SCREEN_HEIGHT - VP_TAB_HEIGHT;    // 384
 
 
 // Tile dimensions
@@ -53,23 +56,36 @@ enum ScrollDirection : uint8_t {
 };
 
 // =============================================================================
-// Coordinate Types
+// Coordinate Types - Defined in game/coord.h
 // =============================================================================
+// COORDINATE, CELL, and related macros (XY_Cell, Cell_X, Cell_Y, etc.)
+// are now included from game/coord.h to avoid redefinition conflicts.
 
-// Coordinate type for world positions (lepton-based)
-typedef uint32_t COORDINATE;
+// Compatibility macros for viewport.cpp (old style SCREAMING_CASE -> CamelCase)
+// Note: coord.h already defines Cell_X, Cell_Y, Coord_X, Coord_Y as CamelCase
+#ifndef COORD_X
+#define COORD_X(coord)      Coord_X(coord)
+#endif
+#ifndef COORD_Y
+#define COORD_Y(coord)      Coord_Y(coord)
+#endif
+#ifndef MAKE_COORD
+#define MAKE_COORD(x, y)    XY_Coord(x, y)
+#endif
+#ifndef MAKE_CELL
+#define MAKE_CELL(x, y)     XY_Cell(x, y)
+#endif
+// SCREAMING_CASE cell macros (used by tests)
+#ifndef CELL_X
+#define CELL_X(cell)        Cell_X(cell)
+#endif
+#ifndef CELL_Y
+#define CELL_Y(cell)        Cell_Y(cell)
+#endif
 
-// Coordinate manipulation macros
-#define COORD_X(coord)      ((coord) & 0xFFFF)
-#define COORD_Y(coord)      (((coord) >> 16) & 0xFFFF)
-#define MAKE_COORD(x, y)    (((uint32_t)(y) << 16) | ((uint32_t)(x) & 0xFFFF))
-
-// Cell coordinate type
-typedef uint16_t CELL;
-
-#define CELL_X(cell)        ((cell) & 0xFF)
-#define CELL_Y(cell)        (((cell) >> 8) & 0xFF)
-#define MAKE_CELL(x, y)     (((uint16_t)(y) << 8) | ((uint16_t)(x) & 0xFF))
+// Compatibility for TACTICAL_WIDTH/HEIGHT
+#define TACTICAL_WIDTH      VP_TACTICAL_WIDTH
+#define TACTICAL_HEIGHT     VP_TACTICAL_HEIGHT
 
 // =============================================================================
 // GameViewport Class

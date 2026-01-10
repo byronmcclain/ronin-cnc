@@ -6,6 +6,8 @@
 
 #include "game/display.h"
 #include "game/cell.h"
+#include "game/graphics/tile_renderer.h"
+#include "game/graphics/graphics_buffer.h"
 #include "platform.h"
 #include <algorithm>
 
@@ -333,26 +335,27 @@ void DisplayClass::Draw_Cell(CELL cell, int screen_x, int screen_y) {
 }
 
 void DisplayClass::Draw_Template(CellClass& cell, int screen_x, int screen_y) {
-    // Placeholder: Draw colored rectangle based on template
-    uint8_t color;
+    TileRenderer& renderer = TileRenderer::Instance();
+    GraphicsBuffer& buffer = GraphicsBuffer::Screen();
 
-    if (!cell.Has_Template()) {
-        color = 0; // Black for no template
-    } else {
-        // Different colors for different land types
-        switch (cell.Get_Land()) {
-            case LAND_CLEAR:    color = 141; break; // Green
-            case LAND_ROAD:     color = 176; break; // Grey
-            case LAND_WATER:    color = 154; break; // Blue
-            case LAND_ROCK:     color = 8;   break; // Dark grey
-            case LAND_TIBERIUM: color = 144; break; // Green/yellow
-            case LAND_BEACH:    color = 157; break; // Tan
-            case LAND_ROUGH:    color = 134; break; // Brown
-            default:            color = 141; break;
-        }
+    // Get template type and icon from cell
+    uint8_t tmpl = cell.Get_Template();
+    uint8_t icon = cell.Get_Icon();
+
+    // Convert cell template (uint8_t) to TileRenderer TemplateType
+    // Cell uses TEMPLATE_NONE=0xFF for no template, TEMPLATE_CLEAR=0 for clear
+    if (tmpl == 0xFF || !cell.Has_Template()) {
+        // No template - draw clear terrain with variation based on cell position
+        renderer.DrawClear(buffer, screen_x, screen_y, cell.Get_Cell_Index());
+        return;
     }
 
-    Draw_Rect(screen_x, screen_y, CELL_PIXEL_SIZE, CELL_PIXEL_SIZE, color);
+    // Try to draw the tile using TileRenderer
+    TemplateType tile_type = static_cast<TemplateType>(tmpl);
+    if (!renderer.DrawTile(buffer, screen_x, screen_y, tile_type, icon)) {
+        // Fallback: draw clear terrain if template loading failed
+        renderer.DrawClear(buffer, screen_x, screen_y, cell.Get_Cell_Index());
+    }
 }
 
 void DisplayClass::Draw_Overlay(CellClass& cell, int screen_x, int screen_y) {

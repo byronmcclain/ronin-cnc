@@ -284,6 +284,20 @@ impl GraphicsState {
             }
         }
     }
+
+    /// Scale mouse coordinates from window space to game space
+    /// Window may be scaled (default 2x) or resized
+    pub fn scale_mouse_coords(&self, window_x: i32, window_y: i32) -> (i32, i32) {
+        let (window_w, window_h) = self.canvas.window().size();
+        let game_w = self.display_mode.width as u32;
+        let game_h = self.display_mode.height as u32;
+
+        // Scale coordinates proportionally
+        let game_x = (window_x as u32 * game_w / window_w) as i32;
+        let game_y = (window_y as u32 * game_h / window_h) as i32;
+
+        (game_x, game_y)
+    }
 }
 
 impl Drop for GraphicsState {
@@ -353,6 +367,12 @@ pub fn is_initialized() -> bool {
     GRAPHICS.lock().ok().map(|g| g.is_some()).unwrap_or(false)
 }
 
+/// Scale mouse coordinates from window space to game space
+pub fn scale_mouse_coords(window_x: i32, window_y: i32) -> (i32, i32) {
+    with_graphics(|state| state.scale_mouse_coords(window_x, window_y))
+        .unwrap_or((window_x, window_y))
+}
+
 /// Poll events and return true if quit was requested
 pub fn poll_events() -> bool {
     let ticks = get_ticks();
@@ -380,11 +400,15 @@ pub fn poll_events() -> bool {
                     input::with_input(|state| state.handle_key_up(key));
                 }
                 sdl2::event::Event::MouseMotion { x, y, .. } => {
-                    input::with_input(|state| state.handle_mouse_motion(x, y));
+                    // Scale mouse coordinates from window space to game space
+                    let (gx, gy) = scale_mouse_coords(x, y);
+                    input::with_input(|state| state.handle_mouse_motion(gx, gy));
                 }
                 sdl2::event::Event::MouseButtonDown { mouse_btn, x, y, .. } => {
+                    // Scale mouse coordinates from window space to game space
+                    let (gx, gy) = scale_mouse_coords(x, y);
                     let btn = input::sdl_to_mousebutton(mouse_btn);
-                    input::with_input(|state| state.handle_mouse_down(btn, x, y, ticks));
+                    input::with_input(|state| state.handle_mouse_down(btn, gx, gy, ticks));
                 }
                 sdl2::event::Event::MouseButtonUp { mouse_btn, .. } => {
                     let btn = input::sdl_to_mousebutton(mouse_btn);

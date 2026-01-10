@@ -246,6 +246,82 @@ impl MixFile {
         })
     }
 
+    /// Create a MIX file from in-memory data
+    ///
+    /// This is used for nested MIX files extracted from a parent MIX.
+    /// The data is kept in memory (cached) since there's no file path.
+    pub fn from_data(name: &str, data: Vec<u8>) -> Result<Self, MixError> {
+        use std::io::Cursor;
+
+        if data.len() < 6 {
+            return Err(MixError::InvalidHeader);
+        }
+
+        let mut cursor = Cursor::new(&data);
+
+        // Read first 4 bytes to detect format
+        let mut flag_buf = [0u8; 4];
+        cursor.read_exact(&mut flag_buf)?;
+
+        let first = i16::from_le_bytes([flag_buf[0], flag_buf[1]]);
+
+        let (header, entries, data_start) = if first == 0 {
+            // Extended format
+            let flags = i16::from_le_bytes([flag_buf[2], flag_buf[3]]);
+            let has_digest = (flags & 0x01) != 0;
+            let is_encrypted = (flags & 0x02) != 0;
+
+            if is_encrypted {
+                // Read encrypted MIX file
+                Self::read_encrypted(&mut cursor, has_digest)?
+            } else {
+                // Extended but not encrypted
+                let mut header_buf = [0u8; 6];
+                cursor.read_exact(&mut header_buf)?;
+
+                let mut header = MixHeader::from_bytes(&header_buf)?;
+                header.is_extended = true;
+                header.has_digest = has_digest;
+                header.is_encrypted = false;
+
+                let entries = Self::read_entries(&mut cursor, header.file_count as usize)?;
+                let data_start = cursor.position();
+
+                (header, entries, data_start)
+            }
+        } else {
+            // Plain format
+            let mut extra = [0u8; 2];
+            cursor.read_exact(&mut extra)?;
+
+            let header_buf = [
+                flag_buf[0],
+                flag_buf[1],
+                flag_buf[2],
+                flag_buf[3],
+                extra[0],
+                extra[1],
+            ];
+
+            let header = MixHeader::from_bytes(&header_buf)?;
+            let entries = Self::read_entries(&mut cursor, header.file_count as usize)?;
+            let data_start = cursor.position();
+
+            (header, entries, data_start)
+        };
+
+        // For in-memory MIX, we need to extract just the data section
+        let data_section = data[data_start as usize..].to_vec();
+
+        Ok(MixFile {
+            path: format!("memory://{}", name),
+            header,
+            entries,
+            data_start: 0, // Data starts at offset 0 in cached_data
+            cached_data: Some(data_section),
+        })
+    }
+
     /// Read entries from a reader
     fn read_entries<R: Read>(reader: &mut R, count: usize) -> Result<Vec<MixEntry>, MixError> {
         let mut entries = Vec::with_capacity(count);
@@ -509,6 +585,27 @@ impl MixManager {
         Ok(())
     }
 
+    /// Register a nested MIX file from data
+    ///
+    /// This extracts a nested MIX file from a parent MIX and registers it.
+    /// The nested MIX filename is searched in currently registered MIX files.
+    pub fn register_nested(&mut self, nested_name: &str) -> Result<(), MixError> {
+        // First, try to read the nested MIX from existing registered MIX files
+        let data = self.read(nested_name)?;
+
+        // Parse it as a MIX file
+        let mix = MixFile::from_data(nested_name, data)?;
+        self.mixes.push(mix);
+        Ok(())
+    }
+
+    /// Register a MIX file from in-memory data
+    pub fn register_from_data(&mut self, name: &str, data: Vec<u8>) -> Result<(), MixError> {
+        let mix = MixFile::from_data(name, data)?;
+        self.mixes.push(mix);
+        Ok(())
+    }
+
     /// Unregister a MIX file by path
     pub fn unregister(&mut self, path: &str) -> bool {
         if let Some(idx) = self.mixes.iter().position(|m| m.path == path) {
@@ -596,6 +693,27 @@ impl MixManager {
     /// Look up a filename by CRC (if registered)
     pub fn lookup_name(&self, crc: i32) -> Option<&str> {
         self.name_map.get(&crc).map(|s| s.as_str())
+    }
+
+    /// Debug: dump all entries in all registered MIX files
+    pub fn dump_entries(&self) {
+        for (mix_idx, mix) in self.mixes.iter().enumerate() {
+            eprintln!("[MixManager] MIX #{}: {} ({} entries)", mix_idx, mix.path, mix.file_count());
+            // Print first 20 entries for debugging
+            for (i, entry) in mix.entries().take(20).enumerate() {
+                let name = self.lookup_name(entry.crc).unwrap_or("???");
+                eprintln!("  [{:3}] CRC: 0x{:08X} ({:11}) offset: {:8} size: {:8} name: {}",
+                    i, entry.crc as u32, entry.crc, entry.offset, entry.size, name);
+            }
+            if mix.file_count() > 20 {
+                eprintln!("  ... ({} more entries)", mix.file_count() - 20);
+            }
+        }
+    }
+
+    /// Iterate over all registered MIX files
+    pub fn mixes(&self) -> impl Iterator<Item = &MixFile> {
+        self.mixes.iter()
     }
 }
 

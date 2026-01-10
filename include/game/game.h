@@ -11,6 +11,10 @@
 #include "game/display.h"
 #include "game/house.h"
 #include <cstdint>
+#include <memory>
+
+// Forward declarations
+class MainMenu;
 
 // =============================================================================
 // Game State
@@ -214,6 +218,9 @@ private:
 
     // Display
     DisplayClass* display_;
+
+    // Main Menu
+    std::unique_ptr<MainMenu> menu_;
 };
 
 // =============================================================================

@@ -451,7 +451,10 @@ void TileRenderer::DrawClear(GraphicsBuffer& buffer, int x, int y, uint32_t seed
 // =============================================================================
 
 std::string TileRenderer::GetOverlayFilename(OverlayType overlay) const {
-    if (overlay < 0 || overlay >= OVERLAY_COUNT) {
+    // Note: OVERLAY_FILENAMES array size may differ from cell.h's OVERLAY_COUNT
+    // due to different overlay definitions. Use array size directly.
+    constexpr int OVERLAY_FILENAMES_COUNT = sizeof(OVERLAY_FILENAMES) / sizeof(OVERLAY_FILENAMES[0]);
+    if (overlay < 0 || overlay >= OVERLAY_FILENAMES_COUNT) {
         return "";
     }
     return std::string(OVERLAY_FILENAMES[overlay]) + ".SHP";
@@ -492,7 +495,7 @@ bool TileRenderer::LoadOverlay(OverlayType overlay) {
 
 bool TileRenderer::DrawOverlay(GraphicsBuffer& buffer, int x, int y,
                                 OverlayType overlay, int frame) {
-    if (overlay == OVERLAY_NONE) {
+    if (overlay == OVERLAY_NONE_TYPE) {
         return true;  // Nothing to draw
     }
 

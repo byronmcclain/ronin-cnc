@@ -23,12 +23,12 @@ class TechnoClass;
 // Maximum objects that can occupy a single cell
 constexpr int CELL_MAX_OBJECTS = 4;
 
-// Special template values
-constexpr uint8_t TEMPLATE_NONE = 0xFF;
-constexpr uint8_t TEMPLATE_CLEAR = 0;
+// Special template values (prefixed CELL_ to avoid collision with TemplateType enum)
+constexpr uint8_t CELL_TEMPLATE_NONE = 0xFF;
+constexpr uint8_t CELL_TEMPLATE_CLEAR = 0;
 
-// Special overlay values
-constexpr uint8_t OVERLAY_NONE = 0xFF;
+// Special overlay values (prefixed CELL_ for consistency)
+constexpr uint8_t CELL_OVERLAY_NONE = 0xFF;
 
 // =============================================================================
 // Land Types
@@ -173,7 +173,7 @@ public:
     /**
      * Has valid terrain template?
      */
-    bool Has_Template() const { return template_type_ != TEMPLATE_NONE; }
+    bool Has_Template() const { return template_type_ != CELL_TEMPLATE_NONE; }
 
     // -------------------------------------------------------------------------
     // Overlay

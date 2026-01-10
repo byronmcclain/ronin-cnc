@@ -399,6 +399,9 @@ set(GAME_SOURCES
     src/game/game_loop.cpp
     src/game/init.cpp
 
+    # UI
+    src/game/ui/main_menu.cpp
+
     # Graphics (Phase 15)
     src/game/graphics/graphics_buffer.cpp
     src/game/graphics/shape_renderer.cpp
@@ -446,6 +449,7 @@ set(GAME_HEADERS
     include/game/map.h
     include/game/cell.h
     include/game/display.h
+    include/game/ui/main_menu.h
     include/game/abstract.h
     include/game/object.h
     include/game/techno.h

@@ -2394,7 +2394,7 @@ pub extern "C" fn Platform_Random_Max(max: u32) -> u32 {
 // MIX File Asset System FFI
 // =============================================================================
 
-use crate::assets::{MixManager, ShapeFile, TemplateFile};
+use crate::assets::{MixManager, PcxImage, ShapeFile, TemplateFile};
 use crate::assets::mix::MixError;
 use crate::assets::palette::Palette as AssetPalette;
 use std::sync::RwLock;
@@ -2617,6 +2617,68 @@ pub extern "C" fn Platform_Mix_GetCount() -> i32 {
     match MIX_MANAGER.read() {
         Ok(manager) => manager.mix_count() as i32,
         Err(_) => 0,
+    }
+}
+
+/// Register a nested MIX file
+///
+/// This extracts a MIX file that's stored inside another registered MIX file
+/// and registers it so its contents can be accessed.
+///
+/// For example, MAIN.MIX contains conquer.mix and local.mix which need to be
+/// extracted and registered to access their contents.
+///
+/// # Safety
+/// - `nested_name` must be a valid null-terminated C string
+///
+/// # Returns
+/// - Number of files in the nested MIX on success
+/// - 0 if nested MIX not found
+/// - -1 on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_Mix_RegisterNested(nested_name: *const c_char) -> i32 {
+    if nested_name.is_null() {
+        return -1;
+    }
+
+    let name_str = match CStr::from_ptr(nested_name).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    match MIX_MANAGER.write() {
+        Ok(mut manager) => {
+            match manager.register_nested(name_str) {
+                Ok(_) => {
+                    // Return the file count of the newly registered MIX
+                    let count = manager.mix_count();
+                    if count > 0 { count as i32 } else { 1 }
+                }
+                Err(MixError::FileNotFound(_)) => 0,
+                Err(ref e) => {
+                    set_error(e.to_string());
+                    -1
+                }
+            }
+        }
+        Err(_) => -1,
+    }
+}
+
+/// Debug: Dump all entries in all registered MIX files
+///
+/// This is for debugging hash lookup issues.
+#[no_mangle]
+pub extern "C" fn Platform_Mix_DumpEntries() {
+    match MIX_MANAGER.read() {
+        Ok(manager) => {
+            eprintln!("[Platform] === MIX Entries Debug Dump ===");
+            manager.dump_entries();
+            eprintln!("[Platform] === End Debug Dump ===");
+        }
+        Err(_) => {
+            eprintln!("[Platform] Failed to acquire MIX_MANAGER lock");
+        }
     }
 }
 
@@ -2996,4 +3058,168 @@ pub unsafe extern "C" fn Platform_Template_GetTile(
         }
         None => 0,
     }
+}
+
+// =============================================================================
+// PCX Image File FFI
+// =============================================================================
+
+/// Opaque handle to a loaded PCX image
+pub struct PlatformPcx {
+    inner: PcxImage,
+}
+
+/// Load a PCX image from MIX archives
+///
+/// # Safety
+/// - `filename` must be a valid null-terminated C string
+///
+/// # Returns
+/// - Pointer to loaded PCX on success
+/// - null on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_PCX_Load(filename: *const c_char) -> *mut PlatformPcx {
+    if filename.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let name_str = match CStr::from_ptr(filename).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    match MIX_MANAGER.read() {
+        Ok(manager) => {
+            match manager.read(name_str) {
+                Ok(data) => {
+                    match PcxImage::from_data(&data) {
+                        Ok(pcx) => {
+                            Box::into_raw(Box::new(PlatformPcx { inner: pcx }))
+                        }
+                        Err(e) => {
+                            set_error(e.to_string());
+                            std::ptr::null_mut()
+                        }
+                    }
+                }
+                Err(e) => {
+                    set_error(e.to_string());
+                    std::ptr::null_mut()
+                }
+            }
+        }
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Load a PCX image from raw data
+///
+/// # Safety
+/// - `data` must point to at least `size` bytes
+///
+/// # Returns
+/// - Pointer to loaded PCX on success
+/// - null on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_PCX_LoadFromMemory(
+    data: *const u8,
+    size: i32,
+) -> *mut PlatformPcx {
+    if data.is_null() || size <= 0 {
+        return std::ptr::null_mut();
+    }
+
+    let slice = std::slice::from_raw_parts(data, size as usize);
+
+    match PcxImage::from_data(slice) {
+        Ok(pcx) => {
+            Box::into_raw(Box::new(PlatformPcx { inner: pcx }))
+        }
+        Err(e) => {
+            set_error(e.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Free a loaded PCX image
+///
+/// # Safety
+/// - `pcx` must be a valid pointer from Platform_PCX_Load/LoadFromMemory
+#[no_mangle]
+pub unsafe extern "C" fn Platform_PCX_Free(pcx: *mut PlatformPcx) {
+    if !pcx.is_null() {
+        drop(Box::from_raw(pcx));
+    }
+}
+
+/// Get PCX image dimensions
+///
+/// # Safety
+/// - `pcx` must be a valid PCX pointer
+#[no_mangle]
+pub unsafe extern "C" fn Platform_PCX_GetSize(
+    pcx: *const PlatformPcx,
+    width: *mut i32,
+    height: *mut i32,
+) {
+    if pcx.is_null() {
+        return;
+    }
+
+    let p = &(*pcx).inner;
+    if !width.is_null() {
+        *width = p.width;
+    }
+    if !height.is_null() {
+        *height = p.height;
+    }
+}
+
+/// Get PCX pixel data
+///
+/// # Safety
+/// - `pcx` must be a valid PCX pointer
+/// - `buffer` must point to at least width * height bytes
+///
+/// # Returns
+/// - Number of bytes copied on success
+/// - -1 on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_PCX_GetPixels(
+    pcx: *const PlatformPcx,
+    buffer: *mut u8,
+    buffer_size: i32,
+) -> i32 {
+    if pcx.is_null() || buffer.is_null() || buffer_size <= 0 {
+        return -1;
+    }
+
+    let p = &(*pcx).inner;
+    let copy_len = std::cmp::min(p.pixels.len(), buffer_size as usize);
+    std::ptr::copy_nonoverlapping(p.pixels.as_ptr(), buffer, copy_len);
+    copy_len as i32
+}
+
+/// Get PCX palette data
+///
+/// # Safety
+/// - `pcx` must be a valid PCX pointer
+/// - `palette` must point to at least 768 bytes
+///
+/// # Returns
+/// - 0 on success
+/// - -1 on error
+#[no_mangle]
+pub unsafe extern "C" fn Platform_PCX_GetPalette(
+    pcx: *const PlatformPcx,
+    palette: *mut u8,
+) -> i32 {
+    if pcx.is_null() || palette.is_null() {
+        return -1;
+    }
+
+    let p = &(*pcx).inner;
+    std::ptr::copy_nonoverlapping(p.palette.as_ptr(), palette, 768);
+    0
 }

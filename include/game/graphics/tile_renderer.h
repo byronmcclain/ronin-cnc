@@ -20,6 +20,13 @@
 #include <memory>
 #include <unordered_map>
 
+// Include map.h for TheaterType definition (avoid redefinition)
+// NOTE: map.h includes gscreen.h, coord.h but NOT tile_renderer.h, so no circular dependency
+#include "game/map.h"
+
+// Include cell.h for OverlayType, LandType definitions (avoid redefinition)
+#include "game/cell.h"
+
 // Forward declarations
 class GraphicsBuffer;
 struct PlatformTemplate;
@@ -33,17 +40,7 @@ constexpr int TILE_WIDTH = 24;
 constexpr int TILE_HEIGHT = 24;
 constexpr int TILE_SIZE = TILE_WIDTH * TILE_HEIGHT;  // 576 bytes
 
-// =============================================================================
-// Theater Type
-// =============================================================================
-
-enum TheaterType : int8_t {
-    THEATER_NONE = -1,
-    THEATER_TEMPERATE = 0,
-    THEATER_SNOW = 1,
-    THEATER_INTERIOR = 2,
-    THEATER_COUNT = 3
-};
+// TheaterType is defined in game/map.h (THEATER_NONE, THEATER_TEMPERATE, THEATER_SNOW, THEATER_INTERIOR)
 
 /**
  * Get theater name for file loading
@@ -102,62 +99,10 @@ enum TemplateType : int16_t {
 };
 
 // =============================================================================
-// Overlay Type
+// Overlay Type & Land Type
 // =============================================================================
-
-/**
- * OverlayType - Identifies overlay graphics
- *
- * Overlays are drawn on top of base terrain (walls, ore, roads).
- */
-enum OverlayType : int8_t {
-    OVERLAY_NONE = -1,
-    OVERLAY_SANDBAG_WALL = 0,
-    OVERLAY_CYCLONE_WALL = 1,
-    OVERLAY_BRICK_WALL = 2,
-    OVERLAY_BARBWIRE_WALL = 3,
-    OVERLAY_WOOD_WALL = 4,
-    OVERLAY_GOLD1 = 5,
-    OVERLAY_GOLD2 = 6,
-    OVERLAY_GOLD3 = 7,
-    OVERLAY_GOLD4 = 8,
-    OVERLAY_GEMS1 = 9,
-    OVERLAY_GEMS2 = 10,
-    OVERLAY_GEMS3 = 11,
-    OVERLAY_GEMS4 = 12,
-    OVERLAY_V12 = 13,
-    OVERLAY_V13 = 14,
-    OVERLAY_V14 = 15,
-    OVERLAY_V15 = 16,
-    OVERLAY_V16 = 17,
-    OVERLAY_V17 = 18,
-    OVERLAY_V18 = 19,
-    OVERLAY_FLAG = 20,
-    OVERLAY_WOOD_FENCE = 21,
-    OVERLAY_COUNT
-};
-
-// =============================================================================
-// Land Type
-// =============================================================================
-
-/**
- * LandType - Terrain passability type
- *
- * Each tile position maps to a land type that affects unit movement.
- */
-enum LandType : int8_t {
-    LAND_CLEAR = 0,     // Normal passable terrain
-    LAND_ROAD = 1,      // Road (faster movement)
-    LAND_WATER = 2,     // Deep water (ships only)
-    LAND_ROCK = 3,      // Impassable rock
-    LAND_WALL = 4,      // Wall (destroyable obstacle)
-    LAND_TIBERIUM = 5,  // Ore/gems (harvestable)
-    LAND_BEACH = 6,     // Beach (amphibious landing)
-    LAND_ROUGH = 7,     // Rough terrain (slower)
-    LAND_RIVER = 8,     // Shallow water
-    LAND_COUNT
-};
+// NOTE: OverlayType and LandType are now defined in game/cell.h
+// to avoid redefinition conflicts. Use those definitions directly.
 
 // =============================================================================
 // Template Data

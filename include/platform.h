@@ -197,6 +197,11 @@ typedef struct PlatformShape PlatformShape;
 typedef struct PlatformTemplate PlatformTemplate;
 
 /**
+ * Opaque handle to a loaded PCX image
+ */
+typedef struct PlatformPcx PlatformPcx;
+
+/**
  * Display mode configuration
  */
 typedef struct DisplayMode {
@@ -1655,6 +1660,27 @@ int32_t Platform_Mix_GetSize(const char *filename);
 int32_t Platform_Mix_GetCount(void);
 
 /**
+ * Register a nested MIX file
+ *
+ * Extracts a MIX file that's stored inside another registered MIX file
+ * and registers it so its contents can be accessed.
+ *
+ * For example, MAIN.MIX contains conquer.mix and local.mix which need to be
+ * extracted and registered to access their contents like TITLE.PCX.
+ *
+ * @param nested_name Name of the nested MIX file (e.g., "local.mix")
+ * @return Number of files in the nested MIX on success, 0 if not found, -1 on error
+ */
+int32_t Platform_Mix_RegisterNested(const char *nested_name);
+
+/**
+ * Debug: Dump all entries in all registered MIX files to stderr
+ *
+ * This is for debugging hash lookup issues.
+ */
+void Platform_Mix_DumpEntries(void);
+
+/**
  * Load a palette from raw PAL data
  *
  * PAL data uses 6-bit color values (0-63), which are shifted to 8-bit (0-252).
@@ -1806,6 +1832,76 @@ int32_t Platform_Template_GetTile(const struct PlatformTemplate *template_,
                                   int32_t tile_index,
                                   uint8_t *buffer,
                                   int32_t buffer_size);
+
+// =============================================================================
+// PCX Image Loading
+// =============================================================================
+
+/**
+ * Load a PCX image from MIX archives
+ *
+ * # Safety
+ * - `filename` must be a valid null-terminated C string
+ *
+ * # Returns
+ * - Pointer to loaded PCX on success
+ * - null on error
+ */
+struct PlatformPcx *Platform_PCX_Load(const char *filename);
+
+/**
+ * Load a PCX image from raw data
+ *
+ * # Safety
+ * - `data` must point to at least `size` bytes
+ *
+ * # Returns
+ * - Pointer to loaded PCX on success
+ * - null on error
+ */
+struct PlatformPcx *Platform_PCX_LoadFromMemory(const uint8_t *data, int32_t size);
+
+/**
+ * Free a loaded PCX image
+ *
+ * # Safety
+ * - `pcx` must be a valid pointer from Platform_PCX_Load/LoadFromMemory
+ */
+void Platform_PCX_Free(struct PlatformPcx *pcx);
+
+/**
+ * Get PCX image dimensions
+ *
+ * # Safety
+ * - `pcx` must be a valid PCX pointer
+ */
+void Platform_PCX_GetSize(const struct PlatformPcx *pcx, int32_t *width, int32_t *height);
+
+/**
+ * Get PCX pixel data
+ *
+ * # Safety
+ * - `pcx` must be a valid PCX pointer
+ * - `buffer` must point to at least width * height bytes
+ *
+ * # Returns
+ * - Number of bytes copied on success
+ * - -1 on error
+ */
+int32_t Platform_PCX_GetPixels(const struct PlatformPcx *pcx, uint8_t *buffer, int32_t buffer_size);
+
+/**
+ * Get PCX palette data (768 bytes, 256 RGB triplets)
+ *
+ * # Safety
+ * - `pcx` must be a valid PCX pointer
+ * - `palette` must point to at least 768 bytes
+ *
+ * # Returns
+ * - 0 on success
+ * - -1 on error
+ */
+int32_t Platform_PCX_GetPalette(const struct PlatformPcx *pcx, uint8_t *palette);
 
 /**
  * Check if running on a Retina/HiDPI display

@@ -7,6 +7,8 @@
 #include "game/game.h"
 #include "game/object.h"
 #include "game/cell.h"
+#include "game/graphics/tile_renderer.h"
+#include "game/ui/main_menu.h"
 #include "platform.h"
 #include <cstdio>
 #include <cstring>
@@ -43,6 +45,7 @@ GameClass::GameClass()
     , last_frame_time_(0)
     , player_house_(HOUSE_GOOD)
     , display_(nullptr)
+    , menu_(nullptr)
 {
 }
 
@@ -79,16 +82,23 @@ bool GameClass::Initialize() {
 
     // Register REDALERT.MIX - contains palettes and core data
     snprintf(mix_path, sizeof(mix_path), "%s/REDALERT.MIX", data_path);
-    if (Platform_Mix_Register(mix_path) > 0) {
-        Platform_LogInfo("  Registered REDALERT.MIX");
+    int reg_result = Platform_Mix_Register(mix_path);
+    if (reg_result == 0) {
         mix_count++;
     }
 
-    // Register MAIN.MIX - contains main game assets
+    // Register MAIN.MIX - contains main game assets (and nested MIX files)
     snprintf(mix_path, sizeof(mix_path), "%s/MAIN.MIX", data_path);
-    if (Platform_Mix_Register(mix_path) > 0) {
-        Platform_LogInfo("  Registered MAIN.MIX");
+    reg_result = Platform_Mix_Register(mix_path);
+    if (reg_result == 0) {
         mix_count++;
+
+        // Register nested MIX files from MAIN.MIX
+        // These contain assets like TITLE.PCX, unit graphics, etc.
+        Platform_Mix_RegisterNested("local.mix");
+        Platform_Mix_RegisterNested("conquer.mix");
+        Platform_Mix_RegisterNested("lores.mix");
+        Platform_Mix_RegisterNested("hires.mix");
     }
 
     // Register theater-specific MIX files
@@ -98,8 +108,11 @@ bool GameClass::Initialize() {
     snprintf(mix_path, sizeof(mix_path), "%s/winter.mix", data_path);
     Platform_Mix_Register(mix_path);
 
+    snprintf(mix_path, sizeof(mix_path), "%s/temperat.mix", data_path);
+    Platform_Mix_Register(mix_path);
+
     char msg[64];
-    snprintf(msg, sizeof(msg), "Registered %d MIX files", mix_count);
+    snprintf(msg, sizeof(msg), "Registered %d primary MIX files", mix_count);
     Platform_LogInfo(msg);
 
     // Create display
@@ -124,6 +137,23 @@ bool GameClass::Initialize() {
     frame_ = 0;
     tick_ = 0;
 
+    // Create and initialize main menu
+    menu_ = std::make_unique<MainMenu>();
+    if (!menu_->Initialize()) {
+        Platform_LogWarn("MainMenu initialization failed, using fallback");
+        // Set a default palette so something is visible
+        PaletteEntry default_palette[256];
+        for (int i = 0; i < 256; i++) {
+            default_palette[i].r = static_cast<uint8_t>(i);
+            default_palette[i].g = static_cast<uint8_t>(i);
+            default_palette[i].b = static_cast<uint8_t>(i);
+        }
+        default_palette[0].r = 0;
+        default_palette[0].g = 0;
+        default_palette[0].b = 0;
+        Platform_Graphics_SetPalette(default_palette, 0, 256);
+    }
+
     // Start in menu mode
     mode_ = GAME_MODE_MENU;
     is_initialized_ = true;
@@ -138,6 +168,9 @@ void GameClass::Shutdown() {
     }
 
     Platform_LogInfo("GameClass::Shutdown: Starting...");
+
+    // Clean up main menu
+    menu_.reset();
 
     // Clean up display
     if (display_ != nullptr) {
@@ -251,67 +284,76 @@ void GameClass::Process_Input() {
 }
 
 void GameClass::Process_Menu() {
-    // Simplified menu - just start playing on ENTER
-    if (Platform_Key_WasPressed(KEY_CODE_RETURN)) {
-        Platform_LogInfo("Loading theater palette...");
+    // Update main menu
+    if (menu_) {
+        menu_->Update();
 
-        // Load the theater palette from MIX files
-        uint8_t palette_data[768];
-        int result = Platform_Palette_Load("TEMPERAT.PAL", palette_data);
+        if (menu_->IsFinished()) {
+            MenuResult selection = menu_->GetSelection();
 
-        if (result == 0) {
-            Platform_LogInfo("Loaded TEMPERAT.PAL successfully");
-            // Apply the palette
-            PaletteEntry entries[256];
-            for (int i = 0; i < 256; i++) {
-                // PAL files are 6-bit (0-63), Platform_Palette_Load converts to 8-bit
-                entries[i].r = palette_data[i * 3 + 0];
-                entries[i].g = palette_data[i * 3 + 1];
-                entries[i].b = palette_data[i * 3 + 2];
-            }
-            Platform_Graphics_SetPalette(entries, 0, 256);
-        } else {
-            Platform_LogError("Failed to load TEMPERAT.PAL, using fallback palette");
-            // Set some fallback colors so we can see something
-            PaletteEntry entries[256];
-            for (int i = 0; i < 256; i++) {
-                entries[i].r = (uint8_t)i;
-                entries[i].g = (uint8_t)i;
-                entries[i].b = (uint8_t)i;
-            }
-            // Add some recognizable colors for terrain types
-            entries[141].r = 50; entries[141].g = 120; entries[141].b = 50;  // Green for clear
-            entries[154].r = 30; entries[154].g = 60;  entries[154].b = 150; // Blue for water
-            entries[176].r = 128; entries[176].g = 128; entries[176].b = 128; // Grey for roads
-            Platform_Graphics_SetPalette(entries, 0, 256);
-        }
+            if (selection == MenuResult::START_NEW_GAME) {
+                Platform_LogInfo("Loading theater and initializing TileRenderer...");
 
-        // Initialize a test scenario
-        if (display_) {
-            display_->Init(THEATER_TEMPERATE);
-
-            // Reveal some cells for testing
-            for (int y = 20; y < 40; y++) {
-                for (int x = 20; x < 60; x++) {
-                    CellClass* cell = display_->Cell_At(x, y);
-                    if (cell) {
-                        cell->Reveal(true);
-                        cell->Set_Template(0, 0); // TEMPLATE_CLEAR = 0
-                    }
+                // Initialize TileRenderer with the theater (this loads palette and templates)
+                TileRenderer& renderer = TileRenderer::Instance();
+                if (!renderer.SetTheater(THEATER_TEMPERATE)) {
+                    Platform_LogError("TileRenderer::SetTheater failed");
+                } else {
+                    Platform_LogInfo("TileRenderer initialized for TEMPERATE theater");
                 }
+
+                // Load the theater palette from MIX files
+                uint8_t palette_data[768];
+                int result = Platform_Palette_Load("TEMPERAT.PAL", palette_data);
+
+                if (result == 0) {
+                    Platform_LogInfo("Loaded TEMPERAT.PAL successfully");
+                    PaletteEntry entries[256];
+                    for (int i = 0; i < 256; i++) {
+                        entries[i].r = palette_data[i * 3 + 0];
+                        entries[i].g = palette_data[i * 3 + 1];
+                        entries[i].b = palette_data[i * 3 + 2];
+                    }
+                    Platform_Graphics_SetPalette(entries, 0, 256);
+                } else {
+                    Platform_LogError("Failed to load TEMPERAT.PAL, using fallback palette");
+                    PaletteEntry entries[256];
+                    for (int i = 0; i < 256; i++) {
+                        entries[i].r = (uint8_t)i;
+                        entries[i].g = (uint8_t)i;
+                        entries[i].b = (uint8_t)i;
+                    }
+                    entries[141].r = 50; entries[141].g = 120; entries[141].b = 50;
+                    entries[154].r = 30; entries[154].g = 60;  entries[154].b = 150;
+                    entries[176].r = 128; entries[176].g = 128; entries[176].b = 128;
+                    Platform_Graphics_SetPalette(entries, 0, 256);
+                }
+
+                // Initialize a test scenario
+                if (display_) {
+                    display_->Init(THEATER_TEMPERATE);
+
+                    for (int y = 20; y < 40; y++) {
+                        for (int x = 20; x < 60; x++) {
+                            CellClass* cell = display_->Cell_At(x, y);
+                            if (cell) {
+                                cell->Reveal(true);
+                                cell->Set_Template(0, 0);
+                            }
+                        }
+                    }
+
+                    display_->Set_Map_Bounds(20, 20, 40, 20);
+                    display_->Center_On(XY_Cell(40, 30));
+                }
+
+                mode_ = GAME_MODE_PLAYING;
+                Platform_LogInfo("Starting gameplay");
+
+            } else if (selection == MenuResult::EXIT_GAME) {
+                mode_ = GAME_MODE_QUIT;
             }
-
-            display_->Set_Map_Bounds(20, 20, 40, 20);
-            display_->Center_On(XY_Cell(40, 30));
         }
-
-        mode_ = GAME_MODE_PLAYING;
-        Platform_LogInfo("Starting gameplay");
-    }
-
-    // ESC to quit
-    if (Platform_Key_WasPressed(KEY_CODE_ESCAPE)) {
-        mode_ = GAME_MODE_QUIT;
     }
 }
 
@@ -405,21 +447,17 @@ void GameClass::Render_Frame() {
     // Render based on mode
     switch (mode_) {
         case GAME_MODE_MENU:
-            // Draw simple menu placeholder with visible colors
-            // Using high palette indices for grayscale visibility
-            display_->Lock();
-            display_->Clear(0);
-            // Outer rectangle (bright white)
-            display_->Draw_Rect(200, 180, 240, 40, 255);
-            // Inner rectangle (gray)
-            display_->Draw_Rect(202, 182, 236, 36, 128);
-            // Draw "PRESS ENTER" indicator with white pixels
-            // Simple horizontal line as visual cue
-            for (int x = 280; x < 360; x++) {
-                display_->Put_Pixel(x, 200, 255);
+            // Render main menu
+            if (menu_) {
+                menu_->Render();
+            } else {
+                // Fallback if no menu
+                display_->Lock();
+                display_->Clear(0);
+                display_->Draw_Rect(200, 180, 240, 40, 255);
+                display_->Unlock();
+                display_->Flip();
             }
-            display_->Unlock();
-            display_->Flip();
             break;
 
         case GAME_MODE_PLAYING:

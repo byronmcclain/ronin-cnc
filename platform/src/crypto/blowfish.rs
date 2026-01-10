@@ -105,25 +105,35 @@ impl BlowfishEngine {
     }
 
     /// Feistel function: F(x) = ((S0[a] + S1[b]) ^ S2[c]) + S3[d]
+    ///
+    /// Westwood's implementation uses little-endian byte order (as per the Int union
+    /// in BLOWFISH.CPP where C0 is MSB due to struct layout on x86).
     #[inline]
     fn feistel(&self, x: u32) -> u32 {
-        let bytes = x.to_be_bytes();
-        let a = bytes[0] as usize;
-        let b = bytes[1] as usize;
-        let c = bytes[2] as usize;
-        let d = bytes[3] as usize;
+        // On little-endian, the bytes of x = 0xAABBCCDD are [DD, CC, BB, AA]
+        // Westwood's Int union has C0=MSB, so we need:
+        // a = (x >> 24) & 0xFF = AA (MSB, index into S0)
+        // b = (x >> 16) & 0xFF = BB
+        // c = (x >> 8) & 0xFF = CC
+        // d = x & 0xFF = DD (LSB, index into S3)
+        let a = ((x >> 24) & 0xFF) as usize;
+        let b = ((x >> 16) & 0xFF) as usize;
+        let c = ((x >> 8) & 0xFF) as usize;
+        let d = (x & 0xFF) as usize;
 
         ((self.s_boxes[0][a].wrapping_add(self.s_boxes[1][b])) ^ self.s_boxes[2][c])
             .wrapping_add(self.s_boxes[3][d])
     }
 
     /// Process a single 8-byte block
+    ///
+    /// Standard Blowfish uses big-endian byte order for the 32-bit values.
     fn process_block(&self, input: &[u8; 8], output: &mut [u8; 8], p_table: &[u32; 18]) {
-        // Read as big-endian (Blowfish is designed for big-endian)
+        // Read as big-endian (standard Blowfish format)
         let mut left = u32::from_be_bytes([input[0], input[1], input[2], input[3]]);
         let mut right = u32::from_be_bytes([input[4], input[5], input[6], input[7]]);
 
-        // Feistel rounds (unrolled for efficiency matching original)
+        // Feistel rounds
         for i in (0..Self::ROUNDS).step_by(2) {
             left ^= p_table[i];
             right ^= self.feistel(left);
@@ -135,7 +145,7 @@ impl BlowfishEngine {
         left ^= p_table[Self::ROUNDS];
         right ^= p_table[Self::ROUNDS + 1];
 
-        // Write as big-endian, swapped (right first, then left)
+        // Write as big-endian (right first, then left - standard Blowfish swap)
         output[0..4].copy_from_slice(&right.to_be_bytes());
         output[4..8].copy_from_slice(&left.to_be_bytes());
     }
@@ -449,5 +459,49 @@ mod tests {
         let key = [0x42u8; BlowfishEngine::MAX_KEY_LENGTH];
         bf.set_key(&key);
         assert!(bf.is_keyed());
+    }
+
+    /// Test against official Blowfish test vectors from Bruce Schneier
+    /// https://www.schneier.com/code/vectors.txt
+    #[test]
+    fn test_official_vectors() {
+        // Test vector: key=0000000000000000, plain=0000000000000000, cipher=4EF997456198DD78
+        let mut bf = BlowfishEngine::new();
+        bf.set_key(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+
+        let mut data = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        bf.encrypt(&mut data);
+
+        let expected = [0x4E, 0xF9, 0x97, 0x45, 0x61, 0x98, 0xDD, 0x78];
+        eprintln!("Test 1: key=all zeros, plain=all zeros");
+        eprintln!("  Expected: {:02X?}", expected);
+        eprintln!("  Got:      {:02X?}", data);
+        assert_eq!(data, expected, "Vector 1 failed");
+
+        // Test vector: key=FFFFFFFFFFFFFFFF, plain=FFFFFFFFFFFFFFFF, cipher=51866FD5B85ECB8A
+        let mut bf = BlowfishEngine::new();
+        bf.set_key(&[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+
+        let mut data = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+        bf.encrypt(&mut data);
+
+        let expected = [0x51, 0x86, 0x6F, 0xD5, 0xB8, 0x5E, 0xCB, 0x8A];
+        eprintln!("Test 2: key=all FF, plain=all FF");
+        eprintln!("  Expected: {:02X?}", expected);
+        eprintln!("  Got:      {:02X?}", data);
+        assert_eq!(data, expected, "Vector 2 failed");
+
+        // Test vector: key=0123456789ABCDEF, plain=1111111111111111, cipher=61F9C3802281B096
+        let mut bf = BlowfishEngine::new();
+        bf.set_key(&[0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]);
+
+        let mut data = [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11];
+        bf.encrypt(&mut data);
+
+        let expected = [0x61, 0xF9, 0xC3, 0x80, 0x22, 0x81, 0xB0, 0x96];
+        eprintln!("Test 3: key=0123456789ABCDEF, plain=all 11");
+        eprintln!("  Expected: {:02X?}", expected);
+        eprintln!("  Got:      {:02X?}", data);
+        assert_eq!(data, expected, "Vector 3 failed");
     }
 }

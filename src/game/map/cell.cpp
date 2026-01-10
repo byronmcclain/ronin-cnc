@@ -42,7 +42,7 @@ const int LandSpeedMultiplier[LAND_COUNT] = {
 
 CellClass::CellClass()
     : cell_index_(0)
-    , template_type_(TEMPLATE_NONE)
+    , template_type_(CELL_TEMPLATE_NONE)
     , template_icon_(0)
     , overlay_type_(OVERLAY_NONE_TYPE)
     , overlay_data_(0)
@@ -56,7 +56,7 @@ CellClass::CellClass()
 }
 
 void CellClass::Clear() {
-    template_type_ = TEMPLATE_NONE;
+    template_type_ = CELL_TEMPLATE_NONE;
     template_icon_ = 0;
     overlay_type_ = OVERLAY_NONE_TYPE;
     overlay_data_ = 0;
@@ -149,7 +149,7 @@ void CellClass::Recalc_Land() {
     // Check terrain template
     // (In full implementation, this would look up template land type)
     // For now, use simple heuristics based on template
-    if (template_type_ == TEMPLATE_NONE || template_type_ == TEMPLATE_CLEAR) {
+    if (template_type_ == CELL_TEMPLATE_NONE || template_type_ == CELL_TEMPLATE_CLEAR) {
         land_type_ = LAND_CLEAR;
     }
     // Template-based land type lookup would go here

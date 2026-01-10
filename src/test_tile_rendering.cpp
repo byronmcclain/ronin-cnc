@@ -104,8 +104,10 @@ bool test_template_types() {
 bool test_overlay_types() {
     TEST_START("overlay types");
 
-    ASSERT(OVERLAY_NONE == -1, "OVERLAY_NONE should be -1");
-    ASSERT(OVERLAY_SANDBAG_WALL == 0, "OVERLAY_SANDBAG_WALL should be 0");
+    // OverlayType is now defined in cell.h with different values
+    ASSERT(OVERLAY_NONE_TYPE == -1, "OVERLAY_NONE_TYPE should be -1");
+    ASSERT(OVERLAY_GOLD1 == 0, "OVERLAY_GOLD1 should be 0");  // Resources start at 0
+    ASSERT(OVERLAY_SANDBAG == 8, "OVERLAY_SANDBAG should be 8");  // Walls start at 8
     ASSERT(OVERLAY_COUNT > 0, "Should have positive overlay count");
 
     TEST_PASS();

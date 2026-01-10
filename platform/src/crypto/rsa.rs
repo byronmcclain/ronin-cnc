@@ -7,15 +7,18 @@
 ///
 /// The modulus is base64-decoded from:
 /// "AihRvNoIbTn85FZRYNZRcT+i6KpU+maCsEqr3Q5q+LDB5tH7Tz2qQ38V"
+/// The base64 decodes to DER-encoded INTEGER: 02 28 <40 bytes of modulus>
+/// We store only the 40-byte modulus value (after DER tag 0x02 and length 0x28).
 ///
 /// The exponent is the standard RSA public exponent: 65537 (0x10001)
 pub const WESTWOOD_PUBLIC_KEY: RsaPublicKey = RsaPublicKey {
     // Base64: AihRvNoIbTn85FZRYNZRcT+i6KpU+maCsEqr3Q5q+LDB5tH7Tz2qQ38V
-    // Decoded bytes (40 bytes):
+    // DER format: 02 (INTEGER tag) 28 (length=40) <modulus bytes>
+    // Actual modulus (40 bytes, big-endian):
     modulus: &[
-        0x02, 0x28, 0x51, 0xBC, 0xDA, 0x08, 0x6D, 0x39, 0xFC, 0xE4, 0x56, 0x51, 0x60, 0xD6, 0x51,
-        0x71, 0x3F, 0xA2, 0xE8, 0xAA, 0x54, 0xFA, 0x66, 0x82, 0xB0, 0x4A, 0xAB, 0xDD, 0x0E, 0x6A,
-        0xF8, 0xB0, 0xC1, 0xE6, 0xD1, 0xFB, 0x4F, 0x3D, 0xAA, 0x43, 0x7F, 0x15,
+        0x51, 0xBC, 0xDA, 0x08, 0x6D, 0x39, 0xFC, 0xE4, 0x56, 0x51, 0x60, 0xD6, 0x51, 0x71, 0x3F,
+        0xA2, 0xE8, 0xAA, 0x54, 0xFA, 0x66, 0x82, 0xB0, 0x4A, 0xAB, 0xDD, 0x0E, 0x6A, 0xF8, 0xB0,
+        0xC1, 0xE6, 0xD1, 0xFB, 0x4F, 0x3D, 0xAA, 0x43, 0x7F, 0x15,
     ],
     exponent: 65537,
 };
@@ -46,17 +49,21 @@ impl RsaPublicKey {
     /// Decrypt a single RSA block
     ///
     /// Performs: plaintext = ciphertext^e mod n
+    ///
+    /// Note: Westwood's MIX format uses little-endian byte ordering for the RSA
+    /// data, but the modulus is stored in big-endian (from base64 encoding).
     pub fn decrypt_block(&self, ciphertext: &[u8]) -> Vec<u8> {
-        // Convert ciphertext to BigUint
-        let c = BigUint::from_be_bytes(ciphertext);
+        // OpenRA uses little-endian byte ordering for the ciphertext
+        // but the modulus is in big-endian (from the base64 string)
+        let c = BigUint::from_le_bytes(ciphertext);
         let n = BigUint::from_be_bytes(self.modulus);
         let e = BigUint::from_u32(self.exponent);
 
         // Compute m = c^e mod n
         let m = mod_pow(&c, &e, &n);
 
-        // Convert back to bytes
-        m.to_be_bytes_padded(self.plain_block_size())
+        // Convert back to little-endian bytes
+        m.to_le_bytes_padded(self.plain_block_size())
     }
 }
 
@@ -164,6 +171,64 @@ impl BigUint {
             bytes.insert(0, 0);
         }
 
+        bytes
+    }
+
+    /// Create a BigUint from little-endian bytes
+    ///
+    /// This matches OpenRA's Buffer.BlockCopy behavior where bytes are
+    /// copied directly into uint arrays (little-endian on x86).
+    fn from_le_bytes(bytes: &[u8]) -> Self {
+        if bytes.is_empty() {
+            return Self { digits: vec![0] };
+        }
+
+        // Process bytes in groups of 4 from the beginning (little-endian)
+        let mut digits = Vec::new();
+        let mut i = 0;
+
+        while i < bytes.len() {
+            let chunk_end = std::cmp::min(i + 4, bytes.len());
+            let mut digit = 0u32;
+
+            // Build digit from bytes at [i..chunk_end] in little-endian order
+            for (j, &byte) in bytes[i..chunk_end].iter().enumerate() {
+                digit |= (byte as u32) << (j * 8);
+            }
+
+            digits.push(digit);
+            i += 4;
+        }
+
+        // Trim leading zeros (from the high end)
+        while digits.len() > 1 && *digits.last().unwrap() == 0 {
+            digits.pop();
+        }
+
+        Self { digits }
+    }
+
+    /// Convert to little-endian bytes with specified minimum length
+    fn to_le_bytes_padded(&self, min_len: usize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        // Convert digits to bytes (little-endian output)
+        for &digit in &self.digits {
+            bytes.extend_from_slice(&digit.to_le_bytes());
+        }
+
+        // Trim trailing zeros to get actual length, but keep at least 1 byte
+        while bytes.len() > 1 && *bytes.last().unwrap() == 0 {
+            bytes.pop();
+        }
+
+        // Pad with trailing zeros if needed
+        while bytes.len() < min_len {
+            bytes.push(0);
+        }
+
+        // Ensure we don't exceed min_len
+        bytes.truncate(min_len);
         bytes
     }
 

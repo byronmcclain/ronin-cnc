@@ -91,3 +91,8 @@ The library is built from modular subdirectories:
 - Assembly files (`.ASM`) use 16-bit and 32-bit x86 with TASM syntax
 - Asset files are processed by tools in `TOOLS/` directory (MIXFILE, KEYFRAME, AUDIOMAK, etc.)
 - Localization exists for English, French, and German
+
+## Workflow Preferences
+
+- **Testing**: The user will manually run the app for testing. Do not attempt to run the game executable automatically.
+- **Reference Project**: OpenRA at `/Users/ooartist/Src/OpenRA_ref` can be used as a reference for solving problems.
